@@ -9,12 +9,9 @@
 - **Email mode** — sends each post as a clean HTML email via any SMTP provider (Mailgun, SendGrid, Gmail, etc.), so your archive lives in your mailbox
 - **Digest mode** — writes one Markdown file per year, ready to upload to [NotebookLM](https://notebooklm.google.com/) or any other tool
 - **PDF mode** — same as Digest mode but writes one formatted PDF per year instead
-
 - **Free-only mode** — no cookies needed; uses Camoufox to bypass bot detection on the Substack API
 - **Paid content support** — fetches subscriber-only posts using cookies exported from your browser
-
 - **Resumable** — caches content and email-delivery state; interrupted runs continue without losing failed sends
-
 - **Date filtering** — optionally process only posts on or after a given date
 
 ## Requirements
