@@ -1,8 +1,8 @@
 ![Subhoard](./header.png)
 
+![Version](https://img.shields.io/badge/version-v1.0.0-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue?logo=python&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-v1.0.0-blue)
 ![Outputs](https://img.shields.io/badge/outputs-email%20%7C%20markdown%20%7C%20PDF-orange)
 ![Substack](https://img.shields.io/badge/works%20with-Substack-FF6719?logo=substack&logoColor=white)
 
