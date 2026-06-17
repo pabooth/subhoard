@@ -44,7 +44,7 @@ Open `subhoard.py` and fill in the `CONFIG` section near the top of the file.
 ### Required
 
 ```python
-SUBSTACK_URL = "https://PUBLICATION.COM" (usually, but not always https://PUBLICATION.substack.com)
+SUBSTACK_URL = "https://PUBLICATION.COM" # (often https://PUBLICATION.substack.com)
 ```
 
 ### Free vs paid content
