@@ -63,9 +63,9 @@ To get `cookies.txt` for paid content:
 ### Output mode
 
 ```python
-OUTPUT_MODE = "email"                          # single mode
+OUTPUT_MODE = "email"                      # single mode
 OUTPUT_MODE = ["pdf", "digest"]            # multiple modes in one run
-OUTPUT_MODE = ["email", "pdf", "digest"]
+OUTPUT_MODE = ["email", "pdf", "digest"]   # all modes in one run
 ```
 
 ### Email settings (required for `email` mode)
