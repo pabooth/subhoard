@@ -1,0 +1,21 @@
+# Credentials — never commit these
+cookies.txt
+
+# Generated output
+post_cache/
+notebooklm_export/
+digest_export/
+pdf_export/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# macOS
+.DS_Store
