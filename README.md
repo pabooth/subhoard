@@ -1,5 +1,12 @@
 ![Subhoard](./header.png)
 
+![Python](https://img.shields.io/badge/python-3.9%2B-blue?logo=python&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+![Outputs](https://img.shields.io/badge/outputs-email%20%7C%20markdown%20%7C%20PDF-orange)
+![Substack](https://img.shields.io/badge/works%20with-Substack-FF6719?logo=substack&logoColor=white)
+
+---
+
 **Subhoard** archives a Substack publication to your email mailbox, a set of yearly Markdown digests, or PDFs — works with both free publications and subscriber-only posts you're paying for.
 
 ---
