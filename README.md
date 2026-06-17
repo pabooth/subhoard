@@ -32,7 +32,7 @@ python3 -m camoufox fetch
 Or download the python file:
 
 ```bash
-curl -O https://raw.githubusercontent.com/pabooth//main/subhoard.py
+curl -O https://raw.githubusercontent.com/pabooth/main/subhoard.py
 pip install camoufox[geoip] beautifulsoup4 reportlab
 python3 -m camoufox fetch   # one-off browser download, ~100 MB
 ```
