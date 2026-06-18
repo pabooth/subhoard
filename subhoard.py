@@ -92,7 +92,7 @@ OUTPUT_MODE = "email"
 # --- Email / SMTP settings (used when OUTPUT_MODE = "email") ---
 # Any SMTP provider works — Mailgun, SendGrid, Gmail, etc.
 SMTP_HOST = "MAILSERVER.ADDRESS"
-SMTP_PORT = PORT
+SMTP_PORT = 587
 SMTP_USERNAME = "YOUR_SMTP_USERNAME"                 # e.g. postmaster@mg.yourdomain.com
 SMTP_PASSWORD = "YOUR_SMTP_PASSWORD"
 
