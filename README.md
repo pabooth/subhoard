@@ -4,7 +4,7 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Outputs](https://img.shields.io/badge/outputs-email%20%7C%20markdown%20%7C%20PDF-orange)
 ![Substack](https://img.shields.io/badge/works%20with-Substack-FF6719?logo=substack&logoColor=white)
-![Version](https://img.shields.io/github/v/release/pabooth/mnemosyne)
+![Version](https://img.shields.io/github/v/release/pabooth/subhoard)
 
 ---
 
