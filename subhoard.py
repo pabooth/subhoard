@@ -74,8 +74,8 @@ except ImportError:
 # CONFIG — fill these in before running
 # ─────────────────────────────────────────────
 
-SUBSTACK_URL = "https://PUBLICATION.substack.com"   # e.g. https://bytebytego.substack.com
-COOKIES_FILE = "cookies.txt"                         # path to exported cookies.txt (not needed if FREE_ONLY = True)
+SUBSTACK_URL = "https://PUBLICATION"   # often https://PUBLICATION.substack.com
+COOKIES_FILE = "cookies.txt"           # path to exported cookies.txt (not needed if FREE_ONLY = True)
 
 # Set True to process only free/public posts — no cookies required.
 # Set False to process all posts including paid content (requires Camoufox + cookies).
@@ -91,13 +91,13 @@ OUTPUT_MODE = "email"
 
 # --- Email / SMTP settings (used when OUTPUT_MODE = "email") ---
 # Any SMTP provider works — Mailgun, SendGrid, Gmail, etc.
-SMTP_HOST = "smtp.mailgun.org"
-SMTP_PORT = 587
+SMTP_HOST = "MAILSERVER.ADDRESS"
+SMTP_PORT = PORT
 SMTP_USERNAME = "YOUR_SMTP_USERNAME"                 # e.g. postmaster@mg.yourdomain.com
 SMTP_PASSWORD = "YOUR_SMTP_PASSWORD"
 
 FROM_ADDRESS = "Publication Name <noreply@yourdomain.com>"   # must be authorised in your SMTP provider
-TO_ADDRESS   = "Your Name <you@example.com>"
+TO_ADDRESS   = "Your Name <you@example.com>"                 # your email address
 
 # --- Digest settings (used when OUTPUT_MODE = "digest") ---
 DIGEST_OUTPUT_DIR = "digest_export"          # directory to write yearly .md files
