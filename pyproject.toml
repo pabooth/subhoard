@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "subhoard"
+version = "2.0.0"
+description = "Archive authorized Substack content to Markdown, PDF, or email"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Paul Booth" },
+]
+keywords = ["substack", "archive", "markdown", "pdf", "email"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Communications :: Email",
+  "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = [
+  "beautifulsoup4",
+  "camoufox[geoip]",
+  "reportlab",
+]
+
+[project.urls]
+Homepage = "https://github.com/pabooth/subhoard"
+Issues = "https://github.com/pabooth/subhoard/issues"
+Source = "https://github.com/pabooth/subhoard"
+
+[project.scripts]
+subhoard = "subhoard:main"
+
+[tool.setuptools]
+py-modules = ["subhoard"]

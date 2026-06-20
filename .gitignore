@@ -1,5 +1,8 @@
 # Credentials — never commit these
 cookies.txt
+*.cookies.txt
+.env
+.env.*
 
 # Generated output
 post_cache/
@@ -7,6 +10,10 @@ notebooklm_export/
 digest_export/
 pdf_export/
 *.log
+.coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # Python
 __pycache__/

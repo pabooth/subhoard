@@ -97,6 +97,52 @@ class CacheTests(unittest.TestCase):
 
         self.assertIsNone(subhoard.load_from_cache(post))
 
+    def test_legacy_cache_files_remain_readable(self):
+        post = {
+            "title": "Legacy",
+            "url": "https://example.substack.com/p/legacy",
+            "slug": "legacy",
+        }
+        with open(
+            subhoard.legacy_cache_path(post),
+            "w",
+            encoding="utf-8",
+        ) as cache:
+            cache.write('{"title": "Legacy", "markdown": "Cached"}')
+
+        self.assertEqual(subhoard.load_from_cache(post)["markdown"], "Cached")
+
+    def test_cache_files_are_private(self):
+        if os.name != "posix":
+            self.skipTest("POSIX permissions only")
+        post = {
+            "title": "Private",
+            "url": "https://example.substack.com/p/private",
+            "slug": "private",
+        }
+
+        subhoard.save_to_cache(post, "Sensitive content")
+
+        self.assertEqual(
+            os.stat(subhoard.cache_path(post)).st_mode & 0o777,
+            0o600,
+        )
+
+
+class CookieTests(unittest.TestCase):
+    def test_http_only_cookies_are_loaded(self):
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as cookie_file:
+            cookie_file.write(
+                "#HttpOnly_.substack.com\tTRUE\t/\tTRUE\t0\t"
+                "substack.sid\tsecret\n"
+            )
+            cookie_file.flush()
+
+            cookies = subhoard.load_cookies(cookie_file.name)
+
+        self.assertEqual(cookies[0]["domain"], ".substack.com")
+        self.assertEqual(cookies[0]["name"], "substack.sid")
+
 
 class EmailTests(unittest.TestCase):
     def test_email_uses_parsed_envelope_addresses(self):
@@ -168,6 +214,46 @@ class EmailTests(unittest.TestCase):
         self.assertTrue(failed_smtp.quit_called)
         self.assertEqual(len(replacement_smtp.calls), 1)
 
+    def test_email_subject_cannot_inject_headers(self):
+        smtp = FakeSMTP()
+        post = {
+            "title": "Subject\r\nBcc: victim@example.com",
+            "date": "2025-01-02",
+        }
+
+        subhoard.send_email(smtp, post, "<p>Body</p>")
+
+        message = smtp.calls[0][2]
+        self.assertIn("Subject: Subject Bcc: victim@example.com", message)
+        self.assertNotIn("\nBcc: victim@example.com", message)
+
+
+class ContentSecurityTests(unittest.TestCase):
+    @unittest.skipIf(
+        subhoard.BeautifulSoup is None,
+        "beautifulsoup4 is not installed",
+    )
+    def test_active_html_is_removed(self):
+        content = subhoard.BeautifulSoup(
+            """
+            <article>
+              <script>alert(1)</script>
+              <a href="javascript:alert(2)" onclick="alert(3)">Link</a>
+              <img src="https://example.com/image.png" onerror="alert(4)">
+            </article>
+            """,
+            "html.parser",
+        )
+
+        subhoard.sanitise_content(content)
+
+        rendered = str(content)
+        self.assertNotIn("<script", rendered)
+        self.assertNotIn("javascript:", rendered)
+        self.assertNotIn("onclick", rendered)
+        self.assertNotIn("onerror", rendered)
+        self.assertIn("https://example.com/image.png", rendered)
+
 
 class ConfigurationTests(unittest.TestCase):
     def test_output_modes_are_deduplicated(self):
@@ -189,6 +275,37 @@ class ConfigurationTests(unittest.TestCase):
             ))
             subhoard.validate_config()
             self.assertEqual(subhoard.OUTPUT_MODE, ["digest"])
+
+    def test_cli_defaults_to_digest_and_reads_environment(self):
+        with patch.dict(
+            os.environ,
+            {
+                "SUBHOARD_URL": "https://example.substack.com",
+                "SUBHOARD_OUTPUT": "digest,pdf",
+            },
+            clear=False,
+        ):
+            parser = subhoard.build_parser()
+            args = parser.parse_args([])
+            subhoard.configure_from_args(args, parser)
+
+        self.assertEqual(subhoard.SUBSTACK_URL, "https://example.substack.com")
+        self.assertEqual(subhoard.OUTPUT_MODE, ["digest", "pdf"])
+
+    def test_post_navigation_is_limited_to_publication_host(self):
+        with patch.object(
+            subhoard,
+            "SUBSTACK_URL",
+            "https://example.substack.com",
+        ):
+            self.assertTrue(
+                subhoard.is_safe_post_url(
+                    "https://example.substack.com/p/allowed"
+                )
+            )
+            self.assertFalse(
+                subhoard.is_safe_post_url("https://attacker.example/p/no")
+            )
 
 
 if __name__ == "__main__":

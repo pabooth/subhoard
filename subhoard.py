@@ -1,64 +1,32 @@
 #!/usr/bin/env python3
 """
-subhoard.py
+Archive a Substack publication to yearly Markdown, PDF, or HTML email.
 
-Downloads all posts from a Substack archive (including subscriber-only content).
-Supports three output modes, controlled by the OUTPUT_MODE config option:
-
-  "email"      — sends each post as an HTML email via SMTP
-  "digest"     — writes one Markdown file per year to DIGEST_OUTPUT_DIR,
-                 ready to upload to NotebookLM or any other tool
-  "pdf"        — writes one PDF per year to PDF_OUTPUT_DIR
-
-FREE_ONLY mode
---------------
-Set FREE_ONLY = True to process only publicly available (free) posts.
-In this mode the script uses Camoufox to make Substack API calls — this
-bypasses bot detection on sites like The Generalist while still returning
-clean JSON rather than scraping HTML. No cookies are needed.
-Set FREE_ONLY = False to process all posts including paid content
-(requires cookies.txt exported from your browser).
-
-SETUP
------
-1. Install dependencies:
-       pip install camoufox[geoip] beautifulsoup4 reportlab
-
-2. Download the Camoufox browser (one-off, ~100MB):
-       python3 -m camoufox fetch
-
-3. Install the "Get cookies.txt LOCALLY" browser extension — only needed
-   if FREE_ONLY = False:
-       Chrome: https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc
-       Firefox: https://addons.mozilla.org/en-US/firefox/addon/get-cookies-txt-locally/
-
-4. Log into substack.com in your browser, then click the extension icon
-   and export cookies.txt. Save it in the same directory as this script.
-   Export from substack.com (not the publication's own domain).
-   (Skip steps 3–4 if FREE_ONLY = True.)
-
-5. Fill in the CONFIG section below.
-
-6. Optionally set DRY_RUN = True to list posts without any output.
-
-7. Run:
-       python3 subhoard.py
+Use only with publications and subscriber content you are authorized to
+access. Run ``subhoard --help`` for configuration details.
 """
 
-import smtplib
-import time
-import re
-import sys
-import os
-import json
-import html
+import argparse
 import email.utils
+import getpass
+import hashlib
+import html
+import json
+import os
 import random
+import re
+import smtplib
+import ssl
+import stat
+import sys
+import tempfile
+import time
 from collections import defaultdict
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from urllib.parse import urlparse
+from importlib.metadata import PackageNotFoundError, version
+from urllib.parse import quote, urlparse
 
 try:
     from camoufox.sync_api import Camoufox
@@ -70,67 +38,213 @@ try:
 except ImportError:
     BeautifulSoup = None
 
-# ─────────────────────────────────────────────
-# CONFIG — fill these in before running
-# ─────────────────────────────────────────────
-
-SUBSTACK_URL = "https://PUBLICATION"   # often https://PUBLICATION.substack.com
-COOKIES_FILE = "cookies.txt"           # path to exported cookies.txt (not needed if FREE_ONLY = True)
-
-# Set True to process only free/public posts — no cookies required.
-# Set False to process all posts including paid content (requires Camoufox + cookies).
+# Runtime defaults. The CLI populates these from command-line arguments and
+# SUBHOARD_* environment variables. They remain module globals to preserve the
+# simple public API used by existing integrations and tests.
+SUBSTACK_URL = ""
+COOKIES_FILE = "cookies.txt"
 FREE_ONLY = True
-
-# Output mode — one or more of "email", "digest", "pdf".
-# A single string is also accepted for convenience.
-# Examples:
-#   OUTPUT_MODE = "email"                              # single mode
-#   OUTPUT_MODE = ["pdf", "digest"]               # pdf + digest in one run
-#   OUTPUT_MODE = ["email", "pdf", "digest"]
-OUTPUT_MODE = "email"
-
-# --- Email / SMTP settings (used when OUTPUT_MODE = "email") ---
-# Any SMTP provider works — Mailgun, SendGrid, Gmail, etc.
-SMTP_HOST = "MAILSERVER.ADDRESS"
+OUTPUT_MODE = ["digest"]
+SMTP_HOST = ""
 SMTP_PORT = 587
-SMTP_USERNAME = "YOUR_SMTP_USERNAME"                 # e.g. postmaster@mg.yourdomain.com
-SMTP_PASSWORD = "YOUR_SMTP_PASSWORD"
-
-FROM_ADDRESS = "Publication Name <noreply@yourdomain.com>"   # must be authorised in your SMTP provider
-TO_ADDRESS   = "Your Name <you@example.com>"                 # your email address
-
-# --- Digest settings (used when OUTPUT_MODE = "digest") ---
-DIGEST_OUTPUT_DIR = "digest_export"          # directory to write yearly .md files
-
-# --- PDF settings (used when OUTPUT_MODE = "pdf") ---
-PDF_OUTPUT_DIR = "pdf_export"                        # directory to write yearly .pdf files
-
-# --- Cache settings ---
-# Each fetched post is written to CACHE_DIR as a small JSON file immediately
-# after fetching. On resume, already-cached posts are skipped. This keeps
-# memory usage flat and allows interrupted runs to continue from where they
-# left off. Set CACHE_DIR = None to disable caching (not recommended for
-# large archives).
+SMTP_USERNAME = ""
+SMTP_PASSWORD = ""
+SMTP_SECURITY = "starttls"
+FROM_ADDRESS = ""
+TO_ADDRESS = ""
+DIGEST_OUTPUT_DIR = "digest_export"
+PDF_OUTPUT_DIR = "pdf_export"
 CACHE_DIR = "post_cache"
-
-# Optional: only process posts on or after this date (YYYY-MM-DD), or None for all
-START_DATE = None   # e.g. "2026-04-01"
-
-# Delay between post fetches in seconds
+START_DATE = None
 FETCH_DELAY = 1.0
-
-# Delay between emails in seconds (email mode only)
 EMAIL_DELAY = 0.5
-
-# Set True to list posts without producing any output
 DRY_RUN = False
-
-# Path to write a log file alongside stdout, or None to print to stdout only
 LOG_FILE = None
 
-# ─────────────────────────────────────────────
-# END CONFIG
-# ─────────────────────────────────────────────
+
+def env(name, default=None):
+    """Return a namespaced environment setting."""
+    return os.environ.get(f"SUBHOARD_{name}", default)
+
+
+def env_float(name, default):
+    """Read a numeric environment setting with an argparse-friendly error."""
+    value = env(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"SUBHOARD_{name} must be a number"
+        ) from exc
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="subhoard",
+        description=(
+            "Archive a Substack publication you are authorized to access "
+            "as Markdown, PDF, or email."
+        ),
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {read_version()}",
+    )
+    parser.add_argument(
+        "--url",
+        default=env("URL", ""),
+        help="Publication URL (env: SUBHOARD_URL).",
+    )
+    parser.add_argument(
+        "--output",
+        action="append",
+        choices=("digest", "pdf", "email"),
+        dest="outputs",
+        help=(
+            "Output format; repeat for multiple formats. "
+            "Defaults to digest (env: SUBHOARD_OUTPUT, comma-separated)."
+        ),
+    )
+    access = parser.add_mutually_exclusive_group()
+    access.add_argument(
+        "--free-only",
+        action="store_true",
+        default=True,
+        help="Archive public posts only (default).",
+    )
+    access.add_argument(
+        "--subscriber-content",
+        action="store_false",
+        dest="free_only",
+        help="Include content your exported Substack session can access.",
+    )
+    parser.add_argument(
+        "--cookies-file",
+        default=env("COOKIES_FILE", "cookies.txt"),
+        help="Netscape-format cookie file for subscriber content.",
+    )
+    parser.add_argument("--start-date", default=env("START_DATE"))
+    parser.add_argument(
+        "--fetch-delay",
+        type=float,
+        default=env_float("FETCH_DELAY", 1.0),
+    )
+    parser.add_argument(
+        "--email-delay",
+        type=float,
+        default=env_float("EMAIL_DELAY", 0.5),
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default=env("CACHE_DIR", "post_cache"),
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_const",
+        const=None,
+        dest="cache_dir",
+        help="Disable the resumable content cache.",
+    )
+    parser.add_argument(
+        "--digest-dir",
+        default=env("DIGEST_DIR", "digest_export"),
+    )
+    parser.add_argument(
+        "--pdf-dir",
+        default=env("PDF_DIR", "pdf_export"),
+    )
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--log-file", default=env("LOG_FILE"))
+
+    email_group = parser.add_argument_group("email output")
+    email_group.add_argument("--smtp-host", default=env("SMTP_HOST", ""))
+    email_group.add_argument(
+        "--smtp-port",
+        type=int,
+        default=int(env("SMTP_PORT", "587")),
+    )
+    email_group.add_argument(
+        "--smtp-username",
+        default=env("SMTP_USERNAME", ""),
+    )
+    email_group.add_argument(
+        "--smtp-security",
+        choices=("starttls", "ssl"),
+        default=env("SMTP_SECURITY", "starttls"),
+        help="SMTP transport security (default: starttls).",
+    )
+    email_group.add_argument("--from-address", default=env("FROM_ADDRESS", ""))
+    email_group.add_argument("--to-address", default=env("TO_ADDRESS", ""))
+    return parser
+
+
+def read_version():
+    try:
+        with open(
+            os.path.join(os.path.dirname(__file__), "VERSION"),
+            encoding="utf-8",
+        ) as version_file:
+            return version_file.read().strip()
+    except OSError:
+        try:
+            return version("subhoard")
+        except PackageNotFoundError:
+            return "unknown"
+
+
+def configure_from_args(args, parser):
+    """Apply parsed CLI settings to the module's runtime configuration."""
+    global CACHE_DIR, COOKIES_FILE, DIGEST_OUTPUT_DIR, DRY_RUN, EMAIL_DELAY
+    global FETCH_DELAY, FREE_ONLY, FROM_ADDRESS, LOG_FILE, OUTPUT_MODE
+    global PDF_OUTPUT_DIR, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT, SMTP_SECURITY
+    global SMTP_USERNAME
+    global START_DATE, SUBSTACK_URL, TO_ADDRESS
+
+    outputs = args.outputs
+    if outputs is None:
+        outputs = [
+            mode.strip()
+            for mode in env("OUTPUT", "digest").split(",")
+            if mode.strip()
+        ]
+    invalid_outputs = sorted(set(outputs) - {"digest", "pdf", "email"})
+    if invalid_outputs:
+        parser.error(
+            "SUBHOARD_OUTPUT contains invalid values: "
+            + ", ".join(invalid_outputs)
+        )
+
+    SUBSTACK_URL = args.url
+    OUTPUT_MODE = outputs
+    FREE_ONLY = args.free_only
+    COOKIES_FILE = args.cookies_file
+    START_DATE = args.start_date
+    FETCH_DELAY = args.fetch_delay
+    EMAIL_DELAY = args.email_delay
+    CACHE_DIR = args.cache_dir
+    DIGEST_OUTPUT_DIR = args.digest_dir
+    PDF_OUTPUT_DIR = args.pdf_dir
+    DRY_RUN = args.dry_run
+    LOG_FILE = args.log_file
+    SMTP_HOST = args.smtp_host
+    SMTP_PORT = args.smtp_port
+    SMTP_USERNAME = args.smtp_username
+    SMTP_PASSWORD = env("SMTP_PASSWORD", "")
+    SMTP_SECURITY = args.smtp_security
+    FROM_ADDRESS = args.from_address
+    TO_ADDRESS = args.to_address
+
+    if "email" in OUTPUT_MODE and not DRY_RUN and not SMTP_PASSWORD:
+        if sys.stdin.isatty():
+            SMTP_PASSWORD = getpass.getpass("SMTP password: ")
+        else:
+            parser.error(
+                "email output requires SUBHOARD_SMTP_PASSWORD "
+                "when stdin is not interactive"
+            )
 
 
 def validate_config():
@@ -144,11 +258,24 @@ def validate_config():
         errors.append("SUBSTACK_URL must be a string")
         parsed_url = urlparse("")
     else:
-        if "PUBLICATION" in SUBSTACK_URL:
-            errors.append("SUBSTACK_URL")
+        if not SUBSTACK_URL:
+            errors.append("SUBSTACK_URL (pass --url or set SUBHOARD_URL)")
         parsed_url = urlparse(SUBSTACK_URL)
-    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-        errors.append("SUBSTACK_URL must be an absolute http(s) URL")
+    if parsed_url.scheme != "https" or not parsed_url.netloc:
+        errors.append("SUBSTACK_URL must be an absolute HTTPS URL")
+    if parsed_url.username or parsed_url.password:
+        errors.append("SUBSTACK_URL must not contain credentials")
+    if parsed_url.query or parsed_url.fragment:
+        errors.append("SUBSTACK_URL must not contain a query string or fragment")
+    if parsed_url.path not in {"", "/"}:
+        errors.append("SUBSTACK_URL must point to the publication root")
+    try:
+        port = parsed_url.port
+    except ValueError:
+        errors.append("SUBSTACK_URL contains an invalid port")
+    else:
+        if port not in {None, 443}:
+            errors.append("SUBSTACK_URL must use the standard HTTPS port")
     if not FREE_ONLY and not os.path.exists(COOKIES_FILE):
         errors.append(f"COOKIES_FILE ('{COOKIES_FILE}' not found)")
     valid_modes = {"email", "digest", "pdf"}
@@ -169,16 +296,20 @@ def validate_config():
         if not isinstance(value, (int, float)) or value < 0:
             errors.append(f"{name} must be a non-negative number")
     if "email" in OUTPUT_MODE and not DRY_RUN:
-        if "YOUR_" in SMTP_USERNAME:
+        if not SMTP_HOST:
+            errors.append("SMTP_HOST")
+        if not SMTP_USERNAME:
             errors.append("SMTP_USERNAME")
-        if "YOUR_" in SMTP_PASSWORD:
+        if not SMTP_PASSWORD:
             errors.append("SMTP_PASSWORD")
-        if "yourdomain" in FROM_ADDRESS:
+        if not isinstance(SMTP_PORT, int) or not 1 <= SMTP_PORT <= 65535:
+            errors.append("SMTP_PORT must be between 1 and 65535")
+        if not email.utils.parseaddr(FROM_ADDRESS)[1]:
             errors.append("FROM_ADDRESS")
-        if "example.com" in TO_ADDRESS:
+        if not email.utils.parseaddr(TO_ADDRESS)[1]:
             errors.append("TO_ADDRESS")
     if errors:
-        print("ERROR: the following config values have not been set:")
+        print("ERROR: invalid configuration:")
         for e in errors:
             print(f"  - {e}")
         sys.exit(1)
@@ -207,11 +338,14 @@ def validate_dependencies():
 
 def load_cookies(path):
     """Parse a Netscape-format cookies.txt into a list of dicts for Playwright."""
+    warn_if_cookie_file_is_exposed(path)
     cookies = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line or line.startswith("#"):
+            if line.startswith("#HttpOnly_"):
+                line = line.removeprefix("#HttpOnly_")
+            elif not line or line.startswith("#"):
                 continue
             parts = line.split("\t")
             if len(parts) < 7:
@@ -224,7 +358,24 @@ def load_cookies(path):
                 "path":   path_,
                 "secure": secure.upper() == "TRUE",
             })
+    if not cookies:
+        raise ValueError(f"No valid cookies found in {path}")
     return cookies
+
+
+def warn_if_cookie_file_is_exposed(path):
+    """Warn when a sensitive cookie export is readable by other local users."""
+    if os.name != "posix":
+        return
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        return
+    if mode & (stat.S_IRWXG | stat.S_IRWXO):
+        print(
+            f"WARNING: {path} is accessible to other users "
+            f"(mode {mode:o}). Run: chmod 600 {path}"
+        )
 
 
 def cache_path(post):
@@ -238,20 +389,36 @@ def cache_path(post):
     )
     # Sanitise slug for use as a filename
     slug = re.sub(r"[^\w\-]", "_", slug)[:80] or "post"
+    identity = post.get("url") or f"{post.get('date', '')}:{post.get('title', '')}"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+    return os.path.join(CACHE_DIR, f"{slug}-{digest}.json")
+
+
+def legacy_cache_path(post):
+    """Return the pre-CLI cache path for backward-compatible resumes."""
+    if not CACHE_DIR:
+        return None
+    slug = (
+        post.get("slug")
+        or post.get("url", "").rstrip("/").split("/")[-1]
+        or f"{post.get('date', '')}_{post.get('title', 'post')}"
+    )
+    slug = re.sub(r"[^\w\-]", "_", slug)[:80] or "post"
     return os.path.join(CACHE_DIR, f"{slug}.json")
 
 
 def load_from_cache(post):
     """Return cached post dict (with markdown key) if it exists, else None."""
-    path = cache_path(post)
-    if not path or not os.path.exists(path):
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            cached = json.load(f)
-        return cached if isinstance(cached, dict) else None
-    except (OSError, json.JSONDecodeError):
-        return None
+    for path in (cache_path(post), legacy_cache_path(post)):
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            return cached if isinstance(cached, dict) else None
+        except (OSError, json.JSONDecodeError):
+            continue
+    return None
 
 
 def save_to_cache(post, body_md, body_html=None, emailed=False):
@@ -259,24 +426,42 @@ def save_to_cache(post, body_md, body_html=None, emailed=False):
     path = cache_path(post)
     if not path:
         return
-    os.makedirs(CACHE_DIR, exist_ok=True)
+    os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(CACHE_DIR, 0o700)
+    except OSError:
+        pass
     cached = {
         **post,
         "markdown": body_md,
         "html": body_html,
         "emailed": emailed,
     }
-    temp_path = f"{path}.tmp"
+    temp_path = None
     try:
-        with open(temp_path, "w", encoding="utf-8") as f:
+        file_descriptor, temp_path = tempfile.mkstemp(
+            prefix=".subhoard-",
+            suffix=".tmp",
+            dir=CACHE_DIR,
+            text=True,
+        )
+        os.chmod(temp_path, 0o600)
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as f:
             json.dump(cached, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(temp_path, path)
+        os.chmod(path, 0o600)
     except OSError as e:
-        try:
-            os.remove(temp_path)
-        except OSError:
-            pass
-        print(f"  Warning: could not write cache for '{post['title']}': {e}")
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        print(
+            "  Warning: could not write cache for "
+            f"'{display_text(post['title'])}': {e}"
+        )
 
 
 def mark_cached_post_emailed(post):
@@ -299,9 +484,15 @@ def load_all_cached_posts(posts=None):
 
     allowed_paths = None
     if posts is not None:
-        allowed_paths = {cache_path(post) for post in posts}
+        allowed_paths = {
+            path
+            for post in posts
+            for path in (cache_path(post), legacy_cache_path(post))
+            if path
+        }
 
     yearly = defaultdict(list)
+    seen_posts = set()
     for fname in sorted(os.listdir(CACHE_DIR)):
         if not fname.endswith(".json"):
             continue
@@ -311,6 +502,10 @@ def load_all_cached_posts(posts=None):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 post = json.load(f)
+            identity = post.get("url") or post.get("slug") or path
+            if identity in seen_posts:
+                continue
+            seen_posts.add(identity)
             year = post.get("date", "")[:4] or "unknown"
             yearly[year].append(post)
         except (OSError, json.JSONDecodeError, AttributeError):
@@ -323,13 +518,13 @@ def load_all_cached_posts(posts=None):
 def get_archive_posts(page):
     """Retrieve all post metadata via the Substack JSON archive API.
 
-    Uses Camoufox to make API calls in both FREE_ONLY and paid modes —
-    this bypasses bot detection while still returning clean JSON.
+    Uses a Camoufox browser session for API calls in both access modes.
     When FREE_ONLY = True, posts with audience != 'everyone' are skipped.
     """
     posts = []
+    seen = set()
     offset = 0
-    limit = 12
+    limit = 50
     base = SUBSTACK_URL.rstrip("/")
 
     print(f"Fetching archive from {base} ...")
@@ -343,7 +538,7 @@ def get_archive_posts(page):
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 break
-            except Exception as e:
+            except Exception:
                 print(f"  Timeout on attempt {attempt + 1}, retrying ...")
                 time.sleep(5)
         else:
@@ -369,13 +564,23 @@ def get_archive_posts(page):
             if FREE_ONLY and post.get("audience", "everyone") != "everyone":
                 continue
 
-            posts.append({
-                "title":    post.get("title", "Untitled"),
-                "subtitle": post.get("subtitle", ""),
-                "url":      post.get("canonical_url", ""),
+            post_url = post.get("canonical_url", "")
+            if not is_safe_post_url(post_url):
+                print(f"  Skipping post with unexpected URL: {post_url!r}")
+                continue
+
+            post_record = {
+                "title":    post.get("title") or "Untitled",
+                "subtitle": post.get("subtitle") or "",
+                "url":      post_url,
                 "date":     post_date,
-                "slug":     post.get("slug", ""),
-            })
+                "slug":     post.get("slug") or "",
+            }
+            identity = post_record["slug"] or post_record["url"]
+            if identity in seen:
+                continue
+            seen.add(identity)
+            posts.append(post_record)
 
         print(f"  {len(posts)} posts fetched so far ...")
         offset += limit
@@ -384,15 +589,27 @@ def get_archive_posts(page):
     return posts
 
 
+def is_safe_post_url(url):
+    """Limit browser navigation to HTTPS URLs on the configured publication."""
+    parsed = urlparse(url)
+    publication = urlparse(SUBSTACK_URL)
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == publication.hostname
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
 def fetch_post_content_api(page, post):
     """Fetch a free post's content via the Substack API using Camoufox.
 
-    Uses the browser to make the API call so bot detection is bypassed,
-    but still returns clean JSON rather than scraping rendered HTML.
+    Uses the browser to make the API call and returns JSON rather than
+    scraping rendered HTML.
     """
     base = SUBSTACK_URL.rstrip("/")
     slug = post.get("slug") or post["url"].rstrip("/").split("/")[-1]
-    api_url = f"{base}/api/v1/posts/{slug}"
+    api_url = f"{base}/api/v1/posts/{quote(slug, safe='')}"
 
     for attempt in range(3):
         try:
@@ -410,16 +627,17 @@ def fetch_post_content_api(page, post):
         return None, None
 
     soup = BeautifulSoup(body_html, "html.parser")
-
-    # Strip paywall / subscribe prompts
-    for el in soup.find_all(class_=re.compile(r"paywall|subscribe-widget|footer|CTAButton")):
-        el.decompose()
+    sanitise_content(soup)
 
     return str(soup), html_to_markdown(soup)
 
 
 def fetch_post_content(page, post_url, post=None):
     """Fetch post content — uses API via browser for free posts, page scrape for paid."""
+    if not is_safe_post_url(post_url):
+        print(f"  Refusing to navigate to unexpected post URL: {post_url!r}")
+        return None, None
+
     if FREE_ONLY and post:
         return fetch_post_content_api(page, post)
 
@@ -442,11 +660,33 @@ def fetch_post_content(page, post_url, post=None):
     if not content:
         return None, None
 
-    # Strip paywall / subscribe prompts
-    for el in content.find_all(class_=re.compile(r"paywall|subscribe-widget|footer|CTAButton")):
-        el.decompose()
+    sanitise_content(content)
 
     return str(content), html_to_markdown(content)
+
+
+def sanitise_content(content):
+    """Remove active content before caching, exporting, or emailing a post."""
+    for element in content.find_all(
+        ["script", "style", "iframe", "object", "embed", "form", "input", "button"]
+    ):
+        element.decompose()
+    for element in content.find_all(
+        class_=re.compile(r"paywall|subscribe-widget|footer|CTAButton", re.I)
+    ):
+        element.decompose()
+    for element in content.find_all(True):
+        for attribute in list(element.attrs):
+            if attribute.lower().startswith("on"):
+                del element.attrs[attribute]
+        for attribute in ("href", "src"):
+            value = element.get(attribute)
+            if value and urlparse(value.strip()).scheme.lower() in {
+                "javascript",
+                "data",
+                "file",
+            }:
+                del element.attrs[attribute]
 
 
 def html_to_markdown(soup_element):
@@ -509,6 +749,7 @@ def build_email_html(post, body_html):
         f"<p style='color:#666;font-size:1.1em;margin:0 0 1.5em 0'>{subtitle}</p>"
         if post["subtitle"] else ""
     )
+    post_date = html.escape(post["date"])
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -529,7 +770,7 @@ def build_email_html(post, body_html):
   <h1>{title}</h1>
   {subtitle_block}
   <div class="meta">
-    {pub_name} &middot; {post['date']} &middot; <a href="{post_url}">View original</a>
+    {pub_name} &middot; {post_date} &middot; <a href="{post_url}">View original</a>
   </div>
   {body_html}
   <div class="footer">Archived from <a href="{publication_url}">{publication_url}</a></div>
@@ -538,15 +779,26 @@ def build_email_html(post, body_html):
 
 
 def connect_smtp():
-    s = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15)
-    s.starttls()
+    tls_context = ssl.create_default_context()
+    if SMTP_SECURITY == "ssl":
+        s = smtplib.SMTP_SSL(
+            SMTP_HOST,
+            SMTP_PORT,
+            timeout=15,
+            context=tls_context,
+        )
+    else:
+        s = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15)
+        s.ehlo()
+        s.starttls(context=tls_context)
+        s.ehlo()
     s.login(SMTP_USERNAME, SMTP_PASSWORD)
     return s
 
 
 def send_email(smtp, post, html_content):
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = post["title"]
+    msg["Subject"] = clean_header(post["title"])
     msg["From"]    = FROM_ADDRESS
     msg["To"]      = TO_ADDRESS
     msg["Date"]    = email.utils.format_datetime(
@@ -556,7 +808,40 @@ def send_email(smtp, post, html_content):
     from_envelope = email.utils.parseaddr(FROM_ADDRESS)[1]
     to_envelope = email.utils.parseaddr(TO_ADDRESS)[1]
     smtp.sendmail(from_envelope, [to_envelope], msg.as_string())
-    print(f"  Sent: {post['title'][:70]}")
+    print(f"  Sent: {display_text(post['title'])[:70]}")
+
+
+def clean_header(value):
+    """Prevent untrusted post metadata from injecting email headers."""
+    return display_text(value)
+
+
+def display_text(value):
+    """Flatten control characters before writing untrusted metadata to logs."""
+    flattened = " ".join(str(value).splitlines())
+    printable = "".join(
+        character if character.isprintable() else " "
+        for character in flattened
+    )
+    return " ".join(printable.split())
+
+
+def make_private_directory(path):
+    """Create an output directory that is private to the current user."""
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    if os.name == "posix":
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            pass
+
+
+def make_private_file(path):
+    if os.name == "posix":
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
 
 def deliver_email(smtp, post, html_content):
@@ -585,7 +870,7 @@ def deliver_email(smtp, post, html_content):
 
 def write_digest_files(yearly_posts):
     """Write one Markdown file per year into DIGEST_OUTPUT_DIR."""
-    os.makedirs(DIGEST_OUTPUT_DIR, exist_ok=True)
+    make_private_directory(DIGEST_OUTPUT_DIR)
     pub_name = SUBSTACK_URL.rstrip("/").split("//")[-1].split(".")[0].title()
 
     for year in sorted(yearly_posts.keys()):
@@ -606,6 +891,7 @@ def write_digest_files(yearly_posts):
                 f.write(post.get("markdown") or "*Content unavailable.*")
                 f.write("\n\n---\n\n")
 
+        make_private_file(filename)
         print(f"  Written: {filename} ({len(posts)} posts)")
 
 
@@ -623,7 +909,7 @@ def write_pdf_files(yearly_posts):
         Spacer,
     )
 
-    os.makedirs(PDF_OUTPUT_DIR, exist_ok=True)
+    make_private_directory(PDF_OUTPUT_DIR)
     pub_name = SUBSTACK_URL.rstrip("/").split("//")[-1].split(".")[0].title()
 
     base_styles = getSampleStyleSheet()
@@ -785,11 +1071,19 @@ def write_pdf_files(yearly_posts):
             story.append(Spacer(1, 4 * mm))
 
         doc.build(story)
+        make_private_file(filename)
         print(f"  Written: {filename} ({len(posts)} posts)")
 
-def main():
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    configure_from_args(args, parser)
+
     if LOG_FILE:
-        sys.stdout = open(LOG_FILE, "w", buffering=1)
+        log_file = open(LOG_FILE, "w", buffering=1, encoding="utf-8")
+        make_private_file(LOG_FILE)
+        sys.stdout = log_file
 
     validate_config()
     validate_dependencies()
@@ -834,7 +1128,7 @@ def main():
     if DRY_RUN:
         print("\nDRY RUN — no output produced:\n")
         for i, post in enumerate(reversed(posts), 1):
-            print(f"  {i:3}. [{post['date']}] {post['title']}")
+            print(f"  {i:3}. [{post['date']}] {display_text(post['title'])}")
         if cf:
             cf.__exit__(None, None, None)
         return
@@ -843,13 +1137,16 @@ def main():
     failed = []
 
     if CACHE_DIR:
-        os.makedirs(CACHE_DIR, exist_ok=True)
+        make_private_directory(CACHE_DIR)
         cached_count = sum(1 for p in posts_ordered if load_from_cache(p) is not None)
         if cached_count:
             print(f"  {cached_count} posts already cached — will skip refetching.")
 
     for i, post in enumerate(posts_ordered, 1):
-        print(f"\n[{i}/{len(posts_ordered)}] {post['title'][:70]}")
+        print(
+            f"\n[{i}/{len(posts_ordered)}] "
+            f"{display_text(post['title'])[:70]}"
+        )
         if not post["url"]:
             print("  Skipping — no URL.")
             continue

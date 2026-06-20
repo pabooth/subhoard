@@ -1,122 +1,171 @@
 ![Subhoard](./header.png)
 
+[![Tests](https://github.com/pabooth/subhoard/actions/workflows/tests.yml/badge.svg)](https://github.com/pabooth/subhoard/actions/workflows/tests.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
-![Outputs](https://img.shields.io/badge/outputs-email%20%7C%20markdown%20%7C%20PDF-orange)
-![Substack](https://img.shields.io/badge/works%20with-Substack-FF6719?logo=substack&logoColor=white)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![Version](https://img.shields.io/github/v/release/pabooth/subhoard)
 
----
+Subhoard archives a Substack publication to yearly Markdown digests, PDFs, or
+HTML email. Public posts work without credentials. Subscriber content can be
+archived using a browser session exported by a user who is authorized to
+access it.
 
-**Subhoard** archives a Substack publication to your email mailbox, a set of yearly Markdown digests, or PDFs — works with both free publications and subscriber-only posts you're paying for.
-
----
+Use Subhoard only for content you are permitted to access and retain. Do not
+redistribute subscriber content without the publisher's permission.
 
 ## Features
 
-- **Email mode** — sends each post as an HTML email, so your archive lives in your mailbox
-- **Digest mode** — writes one Markdown file per year, ready to upload to [NotebookLM](https://notebooklm.google.com/) or any other tool
-- **PDF mode** — same as Digest mode but writes one formatted PDF per year instead
-- **Free-only mode** — no cookies needed; uses Camoufox to bypass bot detection on the Substack API
-- **Paid content support** — fetches subscriber-only posts using cookies exported from your browser
-- **Resumable** — caches content and email-delivery state; interrupted runs continue without losing failed sends
-- **Date filtering** — optionally process only posts on or after a given date
+- Markdown and PDF archives grouped by year
+- HTML email delivery through any standard SMTP provider
+- Public-only mode with no cookies
+- Optional subscriber-content mode using an exported Substack session
+- Resumable, private local cache
+- Date filtering and dry-run previews
+- Multiple output formats in one run
 
 ## Requirements
 
-- Python 3.9+
-- A Substack subscription to the publication (for paid content)
+- Python 3.9 or newer
+- A supported Camoufox browser
+- A valid subscription for any subscriber content being archived
 
 ## Installation
 
-Clone the repo:
-
 ```bash
 git clone https://github.com/pabooth/subhoard.git
-pip install -r requirements.txt
-python3 -m camoufox fetch
+cd subhoard
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install .
+python -m camoufox fetch
 ```
 
-Or download the python file:
+For development, replace `python -m pip install .` with
+`python -m pip install -e .`.
+
+## Quick start
+
+Archive public posts as yearly Markdown files:
 
 ```bash
-curl -O https://raw.githubusercontent.com/pabooth/subhoard/main/subhoard.py
-pip install camoufox[geoip] beautifulsoup4 reportlab
-python3 -m camoufox fetch   # one-off browser download, ~100 MB
+subhoard --url https://example.substack.com
 ```
 
-## Configuration
-
-Open `subhoard.py` and fill in the `CONFIG` section near the top of the file.
-
-### Required
-
-```python
-SUBSTACK_URL = "https://PUBLICATION.COM" # (often https://PUBLICATION.substack.com)
-```
-
-### Free vs paid content
-
-```python
-FREE_ONLY = True   # no cookies needed — skips paid posts
-FREE_ONLY = False  # fetches everything, requires cookies.txt
-```
-
-To get `cookies.txt` for paid content:
-
-1. Install the [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) browser extension
-2. Log into **substack.com** (not the publication's own domain)
-3. Click the extension icon and export — save the file as `cookies.txt` in the same directory as the script
-
-### Output mode
-
-```python
-OUTPUT_MODE = "email"                      # single mode
-OUTPUT_MODE = ["pdf", "digest"]            # multiple modes in one run
-OUTPUT_MODE = ["email", "pdf", "digest"]   # all modes in one run
-```
-
-### Email settings (required for `email` mode)
-
-```python
-SMTP_HOST     = "MAILSERVER"
-SMTP_PORT     = PORT_NUMBER
-SMTP_USERNAME = "YOUR_SMTP_USERNAME"
-SMTP_PASSWORD = "YOUR_SMTP_PASSWORD"
-FROM_ADDRESS  = "Publication Name <noreply@yourdomain.com>"
-TO_ADDRESS    = "Your Name <you@example.com>"
-```
-
-Any SMTP provider works. With Gmail, use an [App Password](https://support.google.com/accounts/answer/185833) and `smtp.gmail.com` on port 587. However, you'll be limited to the sending address depending on the server you use.
-
-### Optional settings
-
-| Setting | Default | Description |
-|---|---|---|
-| `START_DATE` | `None` | Only process posts on or after this date (`"YYYY-MM-DD"`) |
-| `FETCH_DELAY` | `0` | Seconds to wait between post fetches |
-| `EMAIL_DELAY` | `0` | Seconds to wait between emails |
-| `DRY_RUN` | `False` | List posts without producing any output |
-| `LOG_FILE` | `None` | Write output to a log file instead of stdout |
-| `CACHE_DIR` | `"post_cache"` | Directory for the fetch cache; set to `None` to disable |
-| `DIGEST_OUTPUT_DIR` | `"digest_export"` | Output directory for digest mode |
-| `PDF_OUTPUT_DIR` | `"pdf_export"` | Output directory for PDF mode |
-
-## Usage
+Preview matching posts without writing output:
 
 ```bash
-python3 subhoard.py
+subhoard --url https://example.substack.com --dry-run
 ```
 
-Run with `DRY_RUN = True` first to confirm the post list before fetching content.
+Create Markdown and PDF output:
+
+```bash
+subhoard \
+  --url https://example.substack.com \
+  --output digest \
+  --output pdf
+```
+
+The original source invocation remains supported:
+
+```bash
+python subhoard.py --url https://example.substack.com
+```
+
+Run `subhoard --help` for every option.
+
+## Subscriber content
+
+Subscriber mode is for content the current user is authorized to access.
+
+1. Export a Netscape-format `cookies.txt` file from an authenticated
+   `substack.com` browser session using a local-only cookie export tool.
+2. Restrict access to the file:
+
+   ```bash
+   chmod 600 cookies.txt
+   ```
+
+3. Run:
+
+   ```bash
+   subhoard \
+     --url https://example.substack.com \
+     --subscriber-content \
+     --cookies-file cookies.txt
+   ```
+
+Cookie exports grant access to your account. Never commit or share them.
+Revoke the browser session if an export may have been exposed.
+
+## Email output
+
+SMTP passwords are intentionally accepted only through the
+`SUBHOARD_SMTP_PASSWORD` environment variable or a hidden interactive prompt.
+
+```bash
+export SUBHOARD_SMTP_PASSWORD='your-app-password'
+
+subhoard \
+  --url https://example.substack.com \
+  --output email \
+  --smtp-host smtp.example.com \
+  --smtp-port 587 \
+  --smtp-username you@example.com \
+  --from-address 'Archive <you@example.com>' \
+  --to-address 'You <you@example.com>'
+```
+
+The default SMTP security mode is STARTTLS. Use `--smtp-security ssl` for
+implicit TLS, commonly on port 465.
+
+## Environment variables
+
+Command-line arguments take precedence over their corresponding environment
+variables.
+
+| Variable | Purpose |
+|---|---|
+| `SUBHOARD_URL` | Publication root URL |
+| `SUBHOARD_OUTPUT` | Comma-separated `digest`, `pdf`, and/or `email` |
+| `SUBHOARD_COOKIES_FILE` | Cookie export path |
+| `SUBHOARD_START_DATE` | Earliest post date in `YYYY-MM-DD` format |
+| `SUBHOARD_FETCH_DELAY` | Delay between archive requests |
+| `SUBHOARD_EMAIL_DELAY` | Delay between emails |
+| `SUBHOARD_CACHE_DIR` | Resumable cache directory |
+| `SUBHOARD_DIGEST_DIR` | Markdown output directory |
+| `SUBHOARD_PDF_DIR` | PDF output directory |
+| `SUBHOARD_LOG_FILE` | Optional log path |
+| `SUBHOARD_SMTP_HOST` | SMTP hostname |
+| `SUBHOARD_SMTP_PORT` | SMTP port |
+| `SUBHOARD_SMTP_USERNAME` | SMTP username |
+| `SUBHOARD_SMTP_PASSWORD` | SMTP password |
+| `SUBHOARD_SMTP_SECURITY` | `starttls` or `ssl` |
+| `SUBHOARD_FROM_ADDRESS` | Sender address |
+| `SUBHOARD_TO_ADDRESS` | Recipient address |
+
+## Local data
+
+By default, Subhoard creates:
+
+- `post_cache/` for resumable content;
+- `digest_export/` for Markdown;
+- `pdf_export/` for PDF files.
+
+These paths are ignored by Git and created with owner-only permissions on
+POSIX systems. They may contain subscriber content, so handle backups and
+cloud synchronization accordingly.
 
 ## Development
 
-The regression suite uses Python's standard library:
-
 ```bash
-python3 -m unittest discover -s tests -v
+python -m unittest discover -s tests -v
+python -m py_compile subhoard.py tests/test_subhoard.py
+ruff check subhoard.py tests
 ```
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) and [SECURITY.md](./SECURITY.md).
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT © 2026 Paul Booth. See [LICENSE](./LICENSE).
