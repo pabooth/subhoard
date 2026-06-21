@@ -1,7 +1,8 @@
-name: Tests
+name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -22,6 +23,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
 
       - name: Verify package installation
         run: |
