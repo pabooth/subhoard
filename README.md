@@ -1,9 +1,9 @@
 ![Subhoard](./header.png)
 
-[![Tests](https://github.com/pabooth/subhoard/actions/workflows/tests.yml/badge.svg)](https://github.com/pabooth/subhoard/actions/workflows/tests.yml)
+![CI](https://img.shields.io/github/actions/workflow/status/pabooth/inbrief/test.yml?branch=main)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
-![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![Version](https://img.shields.io/github/v/release/pabooth/subhoard)
+![Version](https://img.shields.io/github/v/release/pabooth/inbrief)
+
 
 Subhoard archives a Substack publication to yearly Markdown digests, PDFs, or
 HTML email. Public posts work without credentials. Subscriber content can be
