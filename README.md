@@ -40,8 +40,11 @@ python -m pip install .
 python -m camoufox fetch
 ```
 
-For development, replace `python -m pip install .` with
-`python -m pip install -e .`.
+For development, replace `python -m pip install .` with:
+
+```bash
+python -m pip install -e ".[dev]"
+```
 
 ## Quick start
 
@@ -159,12 +162,16 @@ cloud synchronization accordingly.
 ## Development
 
 ```bash
+python -m pip install -e ".[dev]"
 python -m unittest discover -s tests -v
 python -m py_compile subhoard.py tests/test_subhoard.py
 ruff check subhoard.py tests
+python -m build
 ```
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) and [SECURITY.md](./SECURITY.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md), [SECURITY.md](./SECURITY.md), and
+[CHANGELOG.md](./CHANGELOG.md). Support expectations are documented in
+[SUPPORT.md](./SUPPORT.md).
 
 ## License
 

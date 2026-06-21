@@ -15,7 +15,6 @@ authors = [
 ]
 keywords = ["substack", "archive", "markdown", "pdf", "email"]
 classifiers = [
-  "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
@@ -28,9 +27,15 @@ classifiers = [
   "Topic :: Internet :: WWW/HTTP",
 ]
 dependencies = [
-  "beautifulsoup4",
-  "camoufox[geoip]",
-  "reportlab",
+  "beautifulsoup4>=4.12,<5",
+  "camoufox[geoip]>=0.4,<1",
+  "reportlab>=4,<5",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "ruff>=0.15,<0.16",
 ]
 
 [project.urls]
@@ -40,6 +45,14 @@ Source = "https://github.com/pabooth/subhoard"
 
 [project.scripts]
 subhoard = "subhoard:main"
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "S"]
+ignore = ["S101"]
 
 [tool.setuptools]
 py-modules = ["subhoard"]

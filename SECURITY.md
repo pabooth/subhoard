@@ -2,9 +2,14 @@
 
 ## Reporting a vulnerability
 
-Please use GitHub's private vulnerability reporting feature for this
-repository. Do not open a public issue containing credentials, cookie data,
-subscriber content, or exploit details.
+Please report vulnerabilities privately through
+[GitHub security advisories](https://github.com/pabooth/subhoard/security/advisories/new).
+Do not open a public issue containing credentials, cookie data, subscriber
+content, or exploit details.
+
+## Supported versions
+
+Only the latest released version receives security fixes.
 
 ## Sensitive local data
 

@@ -1,0 +1,51 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include cookies, SMTP credentials, subscriber content, or publication data you cannot redistribute.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What problem would this solve, and who encounters it?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or workflow you would like.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Public or subscriber-content fetching
+        - Cache or resume behavior
+        - Markdown or PDF export
+        - Email delivery
+        - Configuration or command line
+        - Packaging or installation
+        - Unsure or cross-cutting
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe current workarounds or alternative approaches, if any.
+  - type: textarea
+    id: security
+    attributes:
+      label: Authorization, privacy, and security impact
+      description: Note any effect on subscriber access, cookies, retained content, generated files, or external delivery.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add sanitized examples or links that clarify the request.

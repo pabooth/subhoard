@@ -332,7 +332,7 @@ def validate_dependencies():
         print("ERROR: missing required dependencies:")
         for package in missing:
             print(f"  - {package}")
-        print("\nInstall them with: pip install -r requirements.txt")
+        print("\nInstall Subhoard with: python -m pip install .")
         sys.exit(1)
 
 
