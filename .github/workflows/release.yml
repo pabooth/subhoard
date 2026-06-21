@@ -79,7 +79,11 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
-          NOTES=$(awk "/^## \[${RELEASE_VERSION}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+          NOTES=$(awk -v ver="$RELEASE_VERSION" '
+            index($0, "## [" ver "]") == 1 { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md)
           {
             echo "NOTES<<EOF"
             echo "$NOTES"
