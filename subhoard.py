@@ -7,6 +7,7 @@ access. Run ``subhoard --help`` for configuration details.
 """
 
 import argparse
+import contextlib
 import email.utils
 import getpass
 import hashlib
@@ -81,6 +82,7 @@ def env_float(name, default):
 
 
 def build_parser():
+    """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
         prog="subhoard",
         description=(
@@ -182,6 +184,7 @@ def build_parser():
 
 
 def read_version():
+    """Return the installed package version, falling back to the VERSION file."""
     try:
         with open(
             os.path.join(os.path.dirname(__file__), "VERSION"),
@@ -248,6 +251,7 @@ def configure_from_args(args, parser):
 
 
 def validate_config():
+    """Validate all configuration globals, exiting on any error."""
     # Normalise OUTPUT_MODE to a list so the rest of the script can treat it uniformly
     global OUTPUT_MODE
     if isinstance(OUTPUT_MODE, str):
@@ -286,7 +290,9 @@ def validate_config():
         OUTPUT_MODE = list(dict.fromkeys(OUTPUT_MODE))
     for mode in OUTPUT_MODE:
         if mode not in valid_modes:
-            errors.append(f"OUTPUT_MODE '{mode}' is not valid — must be one of: email, digest, pdf")
+            errors.append(
+                f"OUTPUT_MODE '{mode}' is invalid; valid modes: email, digest, pdf"
+            )
     if START_DATE:
         try:
             datetime.strptime(START_DATE, "%Y-%m-%d")
@@ -332,7 +338,7 @@ def validate_dependencies():
         print("ERROR: missing required dependencies:")
         for package in missing:
             print(f"  - {package}")
-        print("\nInstall them with: pip install -r requirements.txt")
+        print("\nInstall Subhoard with: python -m pip install .")
         sys.exit(1)
 
 
@@ -340,7 +346,7 @@ def load_cookies(path):
     """Parse a Netscape-format cookies.txt into a list of dicts for Playwright."""
     warn_if_cookie_file_is_exposed(path)
     cookies = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line.startswith("#HttpOnly_"):
@@ -413,7 +419,7 @@ def load_from_cache(post):
         if not path or not os.path.exists(path):
             continue
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 cached = json.load(f)
             return cached if isinstance(cached, dict) else None
         except (OSError, json.JSONDecodeError):
@@ -427,10 +433,8 @@ def save_to_cache(post, body_md, body_html=None, emailed=False):
     if not path:
         return
     os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(CACHE_DIR, 0o700)
-    except OSError:
-        pass
     cached = {
         **post,
         "markdown": body_md,
@@ -454,10 +458,8 @@ def save_to_cache(post, body_md, body_html=None, emailed=False):
         os.chmod(path, 0o600)
     except OSError as e:
         if temp_path:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(temp_path)
-            except OSError:
-                pass
         print(
             "  Warning: could not write cache for "
             f"'{display_text(post['title'])}': {e}"
@@ -500,7 +502,7 @@ def load_all_cached_posts(posts=None):
         if allowed_paths is not None and path not in allowed_paths:
             continue
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 post = json.load(f)
             identity = post.get("url") or post.get("slug") or path
             if identity in seen_posts:
@@ -511,7 +513,9 @@ def load_all_cached_posts(posts=None):
         except (OSError, json.JSONDecodeError, AttributeError):
             pass
     for posts_in_year in yearly.values():
-        posts_in_year.sort(key=lambda post: (post.get("date", ""), post.get("title", "")))
+        posts_in_year.sort(
+            key=lambda post: (post.get("date", ""), post.get("title", ""))
+        )
     return yearly
 
 
@@ -633,7 +637,10 @@ def fetch_post_content_api(page, post):
 
 
 def fetch_post_content(page, post_url, post=None):
-    """Fetch post content — uses API via browser for free posts, page scrape for paid."""
+    """Fetch post content.
+
+    Uses browser API for free posts, page scrape for paid.
+    """
     if not is_safe_post_url(post_url):
         print(f"  Refusing to navigate to unexpected post URL: {post_url!r}")
         return None, None
@@ -694,6 +701,7 @@ def html_to_markdown(soup_element):
     lines = []
 
     def process(el):
+        """Recursively convert a BeautifulSoup element or string to Markdown lines."""
         if isinstance(el, str):
             text = el.strip()
             if text:
@@ -740,6 +748,7 @@ def html_to_markdown(soup_element):
 
 
 def build_email_html(post, body_html):
+    """Wrap a post's HTML body in a styled email-ready HTML document."""
     pub_name = SUBSTACK_URL.rstrip("/").split("//")[-1].split(".")[0].title()
     title = html.escape(post["title"])
     subtitle = html.escape(post["subtitle"])
@@ -756,14 +765,27 @@ def build_email_html(post, body_html):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-  body {{ font-family: Georgia, serif; max-width: 680px; margin: 0 auto; padding: 2em 1em; color: #1a1a1a; background: #fff; }}
+  body {{
+    font-family: Georgia, serif; max-width: 680px;
+    margin: 0 auto; padding: 2em 1em;
+    color: #1a1a1a; background: #fff;
+  }}
   h1 {{ font-size: 1.8em; margin: 0 0 0.25em 0; line-height: 1.3; }}
-  .meta {{ font-size: 0.85em; color: #888; margin-bottom: 2em; border-bottom: 1px solid #eee; padding-bottom: 1em; }}
+  .meta {{
+    font-size: 0.85em; color: #888; margin-bottom: 2em;
+    border-bottom: 1px solid #eee; padding-bottom: 1em;
+  }}
   .meta a {{ color: #888; }}
   img {{ max-width: 100%; height: auto; }}
-  blockquote {{ border-left: 3px solid #ddd; margin: 1.5em 0; padding: 0.5em 1em; color: #555; }}
+  blockquote {{
+    border-left: 3px solid #ddd; margin: 1.5em 0;
+    padding: 0.5em 1em; color: #555;
+  }}
   a {{ color: #1a56db; }}
-  .footer {{ margin-top: 3em; padding-top: 1em; border-top: 1px solid #eee; font-size: 0.8em; color: #aaa; }}
+  .footer {{
+    margin-top: 3em; padding-top: 1em;
+    border-top: 1px solid #eee; font-size: 0.8em; color: #aaa;
+  }}
 </style>
 </head>
 <body>
@@ -773,12 +795,14 @@ def build_email_html(post, body_html):
     {pub_name} &middot; {post_date} &middot; <a href="{post_url}">View original</a>
   </div>
   {body_html}
-  <div class="footer">Archived from <a href="{publication_url}">{publication_url}</a></div>
+  <div class="footer">Archived from
+    <a href="{publication_url}">{publication_url}</a></div>
 </body>
 </html>"""
 
 
 def connect_smtp():
+    """Open and authenticate an SMTP connection using the configured credentials."""
     tls_context = ssl.create_default_context()
     if SMTP_SECURITY == "ssl":
         s = smtplib.SMTP_SSL(
@@ -797,6 +821,7 @@ def connect_smtp():
 
 
 def send_email(smtp, post, html_content):
+    """Send a single post as an HTML email via the given SMTP connection."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = clean_header(post["title"])
     msg["From"]    = FROM_ADDRESS
@@ -830,18 +855,15 @@ def make_private_directory(path):
     """Create an output directory that is private to the current user."""
     os.makedirs(path, mode=0o700, exist_ok=True)
     if os.name == "posix":
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(path, 0o700)
-        except OSError:
-            pass
 
 
 def make_private_file(path):
+    """Restrict a file to owner-only access (0o600) on POSIX systems."""
     if os.name == "posix":
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(path, 0o600)
-        except OSError:
-            pass
 
 
 def deliver_email(smtp, post, html_content):
@@ -855,15 +877,11 @@ def deliver_email(smtp, post, html_content):
         try:
             send_email(replacement, post, html_content)
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 replacement.quit()
-            except Exception:
-                pass
             raise
-        try:
+        with contextlib.suppress(Exception):
             smtp.quit()
-        except Exception:
-            pass
         print("  Resent successfully.")
         return replacement
 
@@ -1008,13 +1026,17 @@ def write_pdf_files(yearly_posts):
             elif stripped.startswith("# "):
                 flowables.append(Paragraph(safe(stripped[2:]), post_styles["h2"]))
             elif stripped.startswith("> "):
-                flowables.append(Paragraph(safe(stripped[2:]), post_styles["blockquote"]))
+                flowables.append(
+                    Paragraph(safe(stripped[2:]), post_styles["blockquote"])
+                )
             elif stripped.startswith("---"):
                 flowables.append(HRFlowable(width="100%", thickness=0.5,
                                             color=colors.HexColor("#dddddd"),
                                             spaceAfter=6, spaceBefore=6))
             elif re.match(r"^[-*] ", stripped):
-                flowables.append(Paragraph(f"\u2022 {safe(stripped[2:])}", post_styles["body"]))
+                flowables.append(
+                    Paragraph(f"\u2022 {safe(stripped[2:])}", post_styles["body"])
+                )
             elif re.match(r"^\d+\. ", stripped):
                 flowables.append(Paragraph(safe(stripped), post_styles["body"]))
             else:
@@ -1076,12 +1098,13 @@ def write_pdf_files(yearly_posts):
 
 
 def main(argv=None):
+    """Parse arguments, validate configuration, and run the archive pipeline."""
     parser = build_parser()
     args = parser.parse_args(argv)
     configure_from_args(args, parser)
 
     if LOG_FILE:
-        log_file = open(LOG_FILE, "w", buffering=1, encoding="utf-8")
+        log_file = open(LOG_FILE, "w", buffering=1, encoding="utf-8")  # noqa: SIM115
         make_private_file(LOG_FILE)
         sys.stdout = log_file
 
@@ -1105,6 +1128,7 @@ def main(argv=None):
     cf = browser = context = page = None
 
     def start_browser():
+        """Launch a Camoufox browser and return (cf, browser, context, page)."""
         cf = Camoufox(headless=True)
         browser = cf.__enter__()
         context = browser.new_context()
@@ -1180,27 +1204,25 @@ def main(argv=None):
                 body_html, body_md = fetch_post_content(page, post["url"], post=post)
             except Exception as e:
                 print(f"  Fetch error ({e}), restarting browser ...")
-                try:
+                with contextlib.suppress(Exception):
                     cf.__exit__(None, None, None)
-                except Exception:
-                    pass
                 time.sleep(5)
                 try:
                     cf, browser, context, page = start_browser()
-                    body_html, body_md = fetch_post_content(page, post["url"], post=post)
+                    body_html, body_md = fetch_post_content(
+                        page, post["url"], post=post
+                    )
                 except Exception as e2:
                     print(f"  Could not recover: {e2}")
         else:
-            for attempt in range(2):
+            for _ in range(2):
                 try:
                     body_html, body_md = fetch_post_content(page, post["url"])
                     break
                 except Exception as e:
                     print(f"  Browser error ({e}), restarting browser ...")
-                    try:
+                    with contextlib.suppress(Exception):
                         cf.__exit__(None, None, None)
-                    except Exception:
-                        pass
                     time.sleep(5)
                     try:
                         cf, browser, context, page = start_browser()
@@ -1230,13 +1252,11 @@ def main(argv=None):
                 failed.append(post["title"])
             time.sleep(EMAIL_DELAY)
             if not FREE_ONLY:
-                time.sleep(random.uniform(2, 6))
+                time.sleep(random.uniform(2, 6))  # noqa: S311
 
     if cf:
-        try:
+        with contextlib.suppress(Exception):
             cf.__exit__(None, None, None)
-        except Exception:
-            pass
 
     if "email" in OUTPUT_MODE and smtp:
         smtp.quit()

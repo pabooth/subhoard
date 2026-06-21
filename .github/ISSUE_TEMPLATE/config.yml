@@ -1,5 +1,1 @@
-blank_issues_enabled: true
-contact_links:
-  - name: Security vulnerability
-    url: https://github.com/pabooth/subhoard/security/advisories/new
-    about: Report vulnerabilities privately; do not disclose credentials or subscriber content.
+blank_issues_enabled: false

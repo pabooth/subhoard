@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.11", "3.13"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v7
@@ -25,14 +25,25 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Verify package installation
+      - name: Install build tools
+        run: python -m pip install --upgrade build pip
+
+      - name: Build distributions
         run: |
-          python -m pip install --no-deps .
+          python -m build
+          test -n "$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
+
+      - name: Install built wheel
+        run: python -m pip install dist/*.whl
+
+      - name: Smoke-test installed application
+        run: |
           subhoard --version
           subhoard --help
 
       - name: Install test tools
-        run: python -m pip install beautifulsoup4 ruff==0.15.18
+        run: python -m pip install ".[dev]"
 
       - name: Lint
         run: ruff check subhoard.py tests
