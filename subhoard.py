@@ -82,6 +82,7 @@ def env_float(name, default):
 
 
 def build_parser():
+    """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
         prog="subhoard",
         description=(
@@ -183,6 +184,7 @@ def build_parser():
 
 
 def read_version():
+    """Return the installed package version, falling back to the VERSION file."""
     try:
         with open(
             os.path.join(os.path.dirname(__file__), "VERSION"),
@@ -249,6 +251,7 @@ def configure_from_args(args, parser):
 
 
 def validate_config():
+    """Validate all configuration globals, exiting on any error."""
     # Normalise OUTPUT_MODE to a list so the rest of the script can treat it uniformly
     global OUTPUT_MODE
     if isinstance(OUTPUT_MODE, str):
@@ -698,6 +701,7 @@ def html_to_markdown(soup_element):
     lines = []
 
     def process(el):
+        """Recursively convert a BeautifulSoup element or string to Markdown lines."""
         if isinstance(el, str):
             text = el.strip()
             if text:
@@ -744,6 +748,7 @@ def html_to_markdown(soup_element):
 
 
 def build_email_html(post, body_html):
+    """Wrap a post's HTML body in a styled email-ready HTML document."""
     pub_name = SUBSTACK_URL.rstrip("/").split("//")[-1].split(".")[0].title()
     title = html.escape(post["title"])
     subtitle = html.escape(post["subtitle"])
@@ -797,6 +802,7 @@ def build_email_html(post, body_html):
 
 
 def connect_smtp():
+    """Open and authenticate an SMTP connection using the configured credentials."""
     tls_context = ssl.create_default_context()
     if SMTP_SECURITY == "ssl":
         s = smtplib.SMTP_SSL(
@@ -815,6 +821,7 @@ def connect_smtp():
 
 
 def send_email(smtp, post, html_content):
+    """Send a single post as an HTML email via the given SMTP connection."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = clean_header(post["title"])
     msg["From"]    = FROM_ADDRESS
@@ -853,6 +860,7 @@ def make_private_directory(path):
 
 
 def make_private_file(path):
+    """Restrict a file to owner-only access (0o600) on POSIX systems."""
     if os.name == "posix":
         with contextlib.suppress(OSError):
             os.chmod(path, 0o600)
@@ -1090,6 +1098,7 @@ def write_pdf_files(yearly_posts):
 
 
 def main(argv=None):
+    """Parse arguments, validate configuration, and run the archive pipeline."""
     parser = build_parser()
     args = parser.parse_args(argv)
     configure_from_args(args, parser)
@@ -1119,6 +1128,7 @@ def main(argv=None):
     cf = browser = context = page = None
 
     def start_browser():
+        """Launch a Camoufox browser and return (cf, browser, context, page)."""
         cf = Camoufox(headless=True)
         browser = cf.__enter__()
         context = browser.new_context()
