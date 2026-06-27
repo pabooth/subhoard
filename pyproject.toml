@@ -29,7 +29,7 @@ classifiers = [
 dependencies = [
   "beautifulsoup4>=4.12,<5",
   "camoufox[geoip]>=0.4,<1",
-  "reportlab>=4,<5",
+  "reportlab>=4,<6",
 ]
 
 [project.optional-dependencies]
