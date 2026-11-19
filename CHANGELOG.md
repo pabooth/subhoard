@@ -7,6 +7,10 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.2.0] - 2026-11-19
+
+Fixed install steps and problem with Substack API
+
 
 ### Fixed
 
