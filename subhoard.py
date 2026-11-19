@@ -527,8 +527,9 @@ def get_archive_posts(page):
     """
     posts = []
     seen = set()
-    offset = 0
-    limit = 50
+    cursor = None
+    # Substack rejects archive requests with limit > 25 (HTTP 400).
+    limit = 25
     base = SUBSTACK_URL.rstrip("/")
 
     print(f"Fetching archive from {base} ...")
@@ -536,7 +537,11 @@ def get_archive_posts(page):
         print("  FREE_ONLY mode — skipping paid posts.")
 
     while True:
-        url = f"{base}/api/v1/archive?sort=new&search=&offset={offset}&limit={limit}"
+        # The archive API pages with an opaque `nextCursor`; the older
+        # `offset` parameter is rejected with HTTP 400.
+        url = f"{base}/api/v1/archive?sort=new&limit={limit}"
+        if cursor:
+            url += f"&cursor={quote(cursor, safe='')}"
 
         for attempt in range(3):
             try:
@@ -550,10 +555,21 @@ def get_archive_posts(page):
             break
 
         try:
-            batch = page.evaluate("() => JSON.parse(document.body.innerText)")
+            data = page.evaluate("() => JSON.parse(document.body.innerText)")
         except Exception:
-            print(f"  Could not parse JSON at offset {offset}, stopping.")
+            print(f"  Could not parse archive JSON from {url}, stopping.")
             break
+
+        if isinstance(data, dict):
+            if data.get("errors"):
+                print(f"  Archive API returned an error: {data['errors']!r}")
+                break
+            batch = data.get("posts")
+            next_cursor = data.get("nextCursor")
+        else:
+            # Older API versions returned a bare list and no cursor.
+            batch = data
+            next_cursor = None
 
         if not batch or not isinstance(batch, list):
             break
@@ -587,10 +603,23 @@ def get_archive_posts(page):
             posts.append(post_record)
 
         print(f"  {len(posts)} posts fetched so far ...")
-        offset += limit
+        if not next_cursor or next_cursor == cursor:
+            break
+        cursor = next_cursor
         time.sleep(FETCH_DELAY)
 
     return posts
+
+
+def publication_name():
+    """Return a display name for the publication, used in titles and filenames.
+
+    Uses the first label of the hostname, ignoring a leading ``www.``:
+    ``https://example.substack.com`` and ``https://www.example.com`` both
+    give ``Example``.
+    """
+    hostname = (urlparse(SUBSTACK_URL).hostname or "").removeprefix("www.")
+    return hostname.split(".")[0].title() or "Substack"
 
 
 def is_safe_post_url(url):
@@ -749,7 +778,7 @@ def html_to_markdown(soup_element):
 
 def build_email_html(post, body_html):
     """Wrap a post's HTML body in a styled email-ready HTML document."""
-    pub_name = SUBSTACK_URL.rstrip("/").split("//")[-1].split(".")[0].title()
+    pub_name = publication_name()
     title = html.escape(post["title"])
     subtitle = html.escape(post["subtitle"])
     post_url = html.escape(post["url"], quote=True)
@@ -889,7 +918,7 @@ def deliver_email(smtp, post, html_content):
 def write_digest_files(yearly_posts):
     """Write one Markdown file per year into DIGEST_OUTPUT_DIR."""
     make_private_directory(DIGEST_OUTPUT_DIR)
-    pub_name = SUBSTACK_URL.rstrip("/").split("//")[-1].split(".")[0].title()
+    pub_name = publication_name()
 
     for year in sorted(yearly_posts.keys()):
         posts = yearly_posts[year]
@@ -928,7 +957,7 @@ def write_pdf_files(yearly_posts):
     )
 
     make_private_directory(PDF_OUTPUT_DIR)
-    pub_name = SUBSTACK_URL.rstrip("/").split("//")[-1].split(".")[0].title()
+    pub_name = publication_name()
 
     base_styles = getSampleStyleSheet()
 
