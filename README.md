@@ -37,46 +37,92 @@ First check that `python3 --version` reports 3.11 or newer. On macOS the
 built-in `/usr/bin/python3` is 3.9, which fails at the dependency step with
 "No matching distribution found". Install a current Python from
 [python.org](https://www.python.org/downloads/) or Homebrew, and if needed
-use it explicitly, for example `python3.13 -m venv .venv`.
+use it explicitly in the `venv` step, for example `python3.13 -m venv ...`.
+
+Subhoard is installed into its own virtual environment under
+`~/.local/share/subhoard`, and the `subhoard` command is linked into
+`~/.local/bin`. The cloned source is only needed during installation.
 
 ```console
-git clone https://github.com/pabooth/subhoard.git
+cd "$(mktemp -d)"
+git clone --quiet https://github.com/pabooth/subhoard.git
 cd subhoard
-git checkout "$(git describe --tags --abbrev=0)"
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --require-hashes -r requirements.lock
-python -m pip install --no-deps .
-python -m camoufox fetch
+git checkout --quiet "$(git describe --tags --abbrev=0)"
+
+python3 -m venv --clear ~/.local/share/subhoard/venv
+~/.local/share/subhoard/venv/bin/python -m pip install \
+  --require-hashes -r requirements.lock
+~/.local/share/subhoard/venv/bin/python -m pip install --no-deps .
+~/.local/share/subhoard/venv/bin/python -m camoufox fetch
+
+mkdir -p ~/.local/bin
+ln -sf ~/.local/share/subhoard/venv/bin/subhoard ~/.local/bin/subhoard
 subhoard --version
 ```
 
 What each step does:
 
+- `mktemp -d` and `git clone` fetch the source into a temporary directory. It
+  can be deleted once installation finishes.
 - `git checkout ...` switches to the most recent release tag. To pin a
   specific release, use its tag instead, for example `git checkout v2.2.0`.
+- `venv --clear` creates the environment, or empties an existing one, so the
+  same steps also perform a clean update.
 - `requirements.lock` pins every dependency to an exact version and SHA-256
   hash, so pip refuses any package that differs from the one that was tested.
   Subhoard itself is then installed with `--no-deps` so nothing outside the
   lock is pulled in.
-- `python -m camoufox fetch` downloads the
+- `camoufox fetch` downloads the
   [Camoufox](https://github.com/daijro/camoufox) browser (a modified Firefox
   build), a GeoIP database, and a browser fingerprint model from those
   projects' GitHub releases. They are stored in your user cache directory, not
   in the virtual environment. Subhoard drives this browser to read Substack's
   archive. The installed `camoufox` package version determines which browser
   build is downloaded.
-- `subhoard --version` confirms the command is installed and on your `PATH`.
-  It should print `subhoard` followed by the release number.
+- `ln -sf` puts the `subhoard` command on your `PATH`. No virtual environment
+  needs to be activated to run it.
+- `subhoard --version` should print `subhoard` followed by the release number.
 
-The `subhoard` command is only available while the virtual environment is
-active. In a new terminal, run `source .venv/bin/activate` from the project
-directory first, or call `.venv/bin/subhoard` directly.
-
-For development, replace the two `pip install` lines with:
+If `subhoard --version` reports `command not found`, `~/.local/bin` is not on
+your `PATH`. This is common on macOS. Add it to your shell profile (for zsh,
+`~/.zshrc`) and open a new terminal:
 
 ```console
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Subhoard writes its cache and output to the directory you run it from,
+unless `--cache-dir`, `--digest-dir`, or `--pdf-dir` say otherwise.
+
+### Updating
+
+Run the installation steps again. They install the latest release into a
+cleared environment. The Camoufox step only downloads a browser when the new
+release needs a different one.
+
+### Uninstalling
+
+```console
+rm ~/.local/bin/subhoard
+rm -rf ~/.local/share/subhoard
+```
+
+To also remove the downloaded browser, run
+`~/.local/share/subhoard/venv/bin/python -m camoufox remove` before deleting
+the environment.
+
+### Development
+
+For working on Subhoard itself, use a virtual environment inside the clone
+and an editable install:
+
+```console
+git clone https://github.com/pabooth/subhoard.git
+cd subhoard
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -e ".[dev]"
+python -m camoufox fetch
 ```
 
 ### Updating the lock file

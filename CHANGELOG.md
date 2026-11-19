@@ -28,6 +28,10 @@ and this project adheres to
   life). CI also tests Python 3.14.
 - Installation instructions use the latest release tag, explain what
   `camoufox fetch` downloads, and finish with an install check.
+- Subhoard is now installed into its own environment under
+  `~/.local/share/subhoard` with the command linked into `~/.local/bin`, so
+  it runs without activating a virtual environment or keeping the clone.
+  The README also covers updating and uninstalling.
 
 ## [2.1.0] - 2026-06-21
 Versioning for all CLI commands
