@@ -7,6 +7,28 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Fixed
+
+- Archive fetching works again. Substack's archive API now rejects the
+  `offset` parameter and limits above 25, so every run reported "No posts
+  found". Subhoard now follows the API's `nextCursor` pagination and reports
+  API errors instead of treating them as an empty archive.
+- Publications on a `www.` custom domain are named after the domain instead
+  of "Www" in digest and PDF filenames, titles, and email headers.
+
+### Added
+
+- `requirements.lock` with exact, hash-verified dependency versions, used by
+  the documented install and by CI.
+
+### Changed
+
+- Python 3.11 is now the minimum supported version (3.9 and 3.10 are end of
+  life). CI also tests Python 3.14.
+- Installation instructions use the latest release tag, explain what
+  `camoufox fetch` downloads, and finish with an install check.
+
 ## [2.1.0] - 2026-06-21
 Versioning for all CLI commands
 Security improvements and fixes

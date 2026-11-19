@@ -24,25 +24,69 @@ redistribute subscriber content without the publisher's permission.
 
 ## Requirements
 
-- Python 3.9 or newer
-- A supported Camoufox browser
+- Python 3.11 or newer
+- About 3 GB of free disk space (mostly the Camoufox browser download)
 - A valid subscription for any subscriber content being archived
 
 ## Installation
 
+Install from the latest tagged release rather than the tip of `main`. Releases
+are the versions that have passed the full release checks.
+
+First check that `python3 --version` reports 3.11 or newer. On macOS the
+built-in `/usr/bin/python3` is 3.9, which fails at the dependency step with
+"No matching distribution found". Install a current Python from
+[python.org](https://www.python.org/downloads/) or Homebrew, and if needed
+use it explicitly, for example `python3.13 -m venv .venv`.
+
 ```console
 git clone https://github.com/pabooth/subhoard.git
 cd subhoard
+git checkout "$(git describe --tags --abbrev=0)"
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install .
+python -m pip install --require-hashes -r requirements.lock
+python -m pip install --no-deps .
 python -m camoufox fetch
+subhoard --version
 ```
 
-For development, replace `python -m pip install .` with:
+What each step does:
+
+- `git checkout ...` switches to the most recent release tag. To pin a
+  specific release, use its tag instead, for example `git checkout v2.2.0`.
+- `requirements.lock` pins every dependency to an exact version and SHA-256
+  hash, so pip refuses any package that differs from the one that was tested.
+  Subhoard itself is then installed with `--no-deps` so nothing outside the
+  lock is pulled in.
+- `python -m camoufox fetch` downloads the
+  [Camoufox](https://github.com/daijro/camoufox) browser (a modified Firefox
+  build), a GeoIP database, and a browser fingerprint model from those
+  projects' GitHub releases. They are stored in your user cache directory, not
+  in the virtual environment. Subhoard drives this browser to read Substack's
+  archive. The installed `camoufox` package version determines which browser
+  build is downloaded.
+- `subhoard --version` confirms the command is installed and on your `PATH`.
+  It should print `subhoard` followed by the release number.
+
+The `subhoard` command is only available while the virtual environment is
+active. In a new terminal, run `source .venv/bin/activate` from the project
+directory first, or call `.venv/bin/subhoard` directly.
+
+For development, replace the two `pip install` lines with:
 
 ```console
 python -m pip install -e ".[dev]"
+```
+
+### Updating the lock file
+
+After changing dependencies in `pyproject.toml`, regenerate the lock with
+[uv](https://docs.astral.sh/uv/):
+
+```console
+uv pip compile pyproject.toml --universal --python-version 3.11 \
+  --generate-hashes -o requirements.lock
 ```
 
 ## Quick start
