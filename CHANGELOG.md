@@ -17,7 +17,9 @@ Fixed install steps and problem with Substack API
 - Archive fetching works again. Substack's archive API now rejects the
   `offset` parameter and limits above 25, so every run reported "No posts
   found". Subhoard now follows the API's `nextCursor` pagination and reports
-  API errors instead of treating them as an empty archive.
+  API errors instead of treating them as an empty archive. Servers that still
+  return the older list format are paged by offset, and a cursor that repeats
+  stops the fetch with an error instead of looping forever.
 - Publications on a `www.` custom domain are named after the domain instead
   of "Www" in digest and PDF filenames, titles, and email headers.
 

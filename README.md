@@ -49,16 +49,18 @@ git clone --quiet https://github.com/pabooth/subhoard.git
 cd subhoard
 git checkout --quiet "$(git describe --tags --abbrev=0)"
 
-python3 -m venv --clear ~/.local/share/subhoard/venv
+python3 -m venv --clear ~/.local/share/subhoard/venv &&
 ~/.local/share/subhoard/venv/bin/python -m pip install \
-  --require-hashes -r requirements.lock
-~/.local/share/subhoard/venv/bin/python -m pip install --no-deps .
-~/.local/share/subhoard/venv/bin/python -m camoufox fetch
-
-mkdir -p ~/.local/bin
-ln -sf ~/.local/share/subhoard/venv/bin/subhoard ~/.local/bin/subhoard
+  --require-hashes -r requirements.lock &&
+~/.local/share/subhoard/venv/bin/python -m pip install --no-deps . &&
+~/.local/share/subhoard/venv/bin/python -m camoufox fetch &&
+mkdir -p ~/.local/bin &&
+ln -sf ~/.local/share/subhoard/venv/bin/subhoard ~/.local/bin/subhoard &&
 subhoard --version
 ```
+
+The install commands are joined with `&&`, so if any step fails, the rest are
+skipped and Subhoard is not linked into `~/.local/bin`.
 
 What each step does:
 
@@ -68,10 +70,12 @@ What each step does:
   specific release, use its tag instead, for example `git checkout v2.2.0`.
 - `venv --clear` creates the environment, or empties an existing one, so the
   same steps also perform a clean update.
-- `requirements.lock` pins every dependency to an exact version and SHA-256
-  hash, so pip refuses any package that differs from the one that was tested.
-  Subhoard itself is then installed with `--no-deps` so nothing outside the
-  lock is pulled in.
+- `requirements.lock` pins every runtime dependency to an exact version and
+  SHA-256 hash, so pip refuses any package that differs from the one that was
+  tested. Subhoard itself is then installed with `--no-deps`, so no further
+  runtime packages are pulled in. Building Subhoard still downloads its build
+  backend (`setuptools`) into an isolated build environment, and that download
+  is not covered by the lock's hashes.
 - `camoufox fetch` downloads the
   [Camoufox](https://github.com/daijro/camoufox) browser (a modified Firefox
   build), a GeoIP database, and a browser fingerprint model from those

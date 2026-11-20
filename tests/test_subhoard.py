@@ -405,6 +405,33 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual([p["slug"] for p in posts], ["legacy"])
         self.assertEqual(len(urls), 1)
 
+    def test_legacy_list_response_pages_by_offset(self):
+        first = [archive_post(f"a{i}", "2026-02-01") for i in range(25)]
+        second = [archive_post("b0", "2026-01-01")]
+        posts, urls = self.fetch([first, second])
+
+        self.assertEqual(len(posts), 26)
+        self.assertEqual(posts[-1]["slug"], "b0")
+        self.assertEqual(len(urls), 2)
+        self.assertNotIn("offset", urls[0])
+        self.assertTrue(urls[1].endswith("&offset=25"))
+        self.assertNotIn("cursor", urls[1])
+
+    def test_repeating_cursor_cycle_stops_with_error(self):
+        responses = [
+            {"posts": [archive_post("p0", "2026-04-01")], "nextCursor": "A"},
+            {"posts": [archive_post("p1", "2026-03-01")], "nextCursor": "B"},
+            {"posts": [archive_post("p2", "2026-02-01")], "nextCursor": "A"},
+            {"posts": [archive_post("p3", "2026-01-01")], "nextCursor": "B"},
+        ]
+        with patch("builtins.print") as fake_print:
+            posts, urls = self.fetch(responses)
+
+        self.assertEqual([p["slug"] for p in posts], ["p0", "p1", "p2"])
+        self.assertEqual(len(urls), 3)
+        printed = " ".join(str(c.args[0]) for c in fake_print.call_args_list)
+        self.assertIn("pagination is not advancing", printed)
+
 
 class PublicationNameTests(unittest.TestCase):
     def name_for(self, url):

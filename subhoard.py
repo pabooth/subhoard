@@ -528,6 +528,9 @@ def get_archive_posts(page):
     posts = []
     seen = set()
     cursor = None
+    requested_cursors = set()
+    # Only used for legacy servers that return a bare list (see below).
+    offset = 0
     # Substack rejects archive requests with limit > 25 (HTTP 400).
     limit = 25
     base = SUBSTACK_URL.rstrip("/")
@@ -538,10 +541,13 @@ def get_archive_posts(page):
 
     while True:
         # The archive API pages with an opaque `nextCursor`; the older
-        # `offset` parameter is rejected with HTTP 400.
+        # `offset` parameter is rejected with HTTP 400, so it is only sent
+        # to legacy servers that have already returned a bare list.
         url = f"{base}/api/v1/archive?sort=new&limit={limit}"
         if cursor:
             url += f"&cursor={quote(cursor, safe='')}"
+        elif offset:
+            url += f"&offset={offset}"
 
         for attempt in range(3):
             try:
@@ -567,7 +573,7 @@ def get_archive_posts(page):
             batch = data.get("posts")
             next_cursor = data.get("nextCursor")
         else:
-            # Older API versions returned a bare list and no cursor.
+            # Older API versions returned a bare list and paged by offset.
             batch = data
             next_cursor = None
 
@@ -603,9 +609,21 @@ def get_archive_posts(page):
             posts.append(post_record)
 
         print(f"  {len(posts)} posts fetched so far ...")
-        if not next_cursor or next_cursor == cursor:
-            break
-        cursor = next_cursor
+        if isinstance(data, list):
+            if len(batch) < limit:
+                break
+            offset += len(batch)
+        else:
+            if not next_cursor:
+                break
+            if next_cursor in requested_cursors:
+                print(
+                    f"  Archive API repeated cursor {next_cursor!r}; "
+                    "pagination is not advancing, stopping."
+                )
+                break
+            requested_cursors.add(next_cursor)
+            cursor = next_cursor
         time.sleep(FETCH_DELAY)
 
     return posts
