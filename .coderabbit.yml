@@ -60,6 +60,11 @@ reviews:
       - "WIP"
       - "[skip review]"
     drafts: false
+    # Bot PRs (dependency bumps) are covered by CI and CodeQL. Keep in step
+    # with the bot exemption in .github/workflows/coderabbit-reviewed.yml.
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "github-actions[bot]"
     base_branches:
       - main
 
