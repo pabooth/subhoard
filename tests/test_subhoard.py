@@ -308,5 +308,169 @@ class ConfigurationTests(unittest.TestCase):
             )
 
 
+class FakeArchivePage:
+    """Stands in for a Camoufox page serving archive API responses."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.urls = []
+
+    def goto(self, url, **kwargs):
+        self.urls.append(url)
+
+    def evaluate(self, script):
+        return self.responses.pop(0)
+
+
+def archive_post(slug, date, audience="everyone"):
+    return {
+        "title": slug.title(),
+        "subtitle": "",
+        "slug": slug,
+        "post_date": f"{date}T08:00:00.000Z",
+        "audience": audience,
+        "canonical_url": f"https://example.substack.com/p/{slug}",
+    }
+
+
+class ArchiveTests(unittest.TestCase):
+    def fetch(self, responses, start_date=None):
+        page = FakeArchivePage(responses)
+        with ExitStack() as stack:
+            for name, value in {
+                "SUBSTACK_URL": "https://example.substack.com",
+                "FREE_ONLY": True,
+                "START_DATE": start_date,
+                "FETCH_DELAY": 0,
+            }.items():
+                stack.enter_context(patch.object(subhoard, name, value))
+            posts = subhoard.get_archive_posts(page)
+        return posts, page.urls
+
+    def test_follows_next_cursor_until_exhausted(self):
+        posts, urls = self.fetch([
+            {"posts": [archive_post("two", "2026-02-01")], "nextCursor": "c/1="},
+            {"posts": [archive_post("one", "2026-01-01")], "nextCursor": None},
+        ])
+
+        self.assertEqual([p["slug"] for p in posts], ["two", "one"])
+        self.assertEqual(len(urls), 2)
+        self.assertNotIn("offset", urls[0])
+        self.assertIn("limit=25", urls[0])
+        self.assertNotIn("cursor", urls[0])
+        self.assertTrue(urls[1].endswith("&cursor=c%2F1%3D"))
+
+    def test_skips_paid_posts_in_free_only_mode(self):
+        posts, _ = self.fetch([
+            {
+                "posts": [
+                    archive_post("free", "2026-02-01"),
+                    archive_post("paid", "2026-01-01", audience="only_paid"),
+                ],
+                "nextCursor": None,
+            },
+        ])
+
+        self.assertEqual([p["slug"] for p in posts], ["free"])
+
+    def test_stops_at_start_date(self):
+        posts, urls = self.fetch(
+            [
+                {
+                    "posts": [
+                        archive_post("new", "2026-02-01"),
+                        archive_post("old", "2025-12-01"),
+                    ],
+                    "nextCursor": "more",
+                },
+            ],
+            start_date="2026-01-01",
+        )
+
+        self.assertEqual([p["slug"] for p in posts], ["new"])
+        self.assertEqual(len(urls), 1)
+
+    def test_api_error_is_reported_not_treated_as_empty_list(self):
+        error = {"errors": [{"param": "offset", "msg": "Invalid value"}]}
+        with patch("builtins.print") as fake_print:
+            posts, _ = self.fetch([error])
+
+        self.assertEqual(posts, [])
+        printed = " ".join(str(c.args[0]) for c in fake_print.call_args_list)
+        self.assertIn("Archive API returned an error", printed)
+
+    def test_accepts_legacy_list_response(self):
+        posts, urls = self.fetch([[archive_post("legacy", "2026-01-01")]])
+
+        self.assertEqual([p["slug"] for p in posts], ["legacy"])
+        self.assertEqual(len(urls), 1)
+
+    def test_legacy_list_response_pages_by_offset(self):
+        first = [archive_post(f"a{i}", "2026-02-01") for i in range(25)]
+        second = [archive_post("b0", "2026-01-01")]
+        posts, urls = self.fetch([first, second])
+
+        self.assertEqual(len(posts), 26)
+        self.assertEqual(posts[-1]["slug"], "b0")
+        self.assertEqual(len(urls), 2)
+        self.assertNotIn("offset", urls[0])
+        self.assertTrue(urls[1].endswith("&offset=25"))
+        self.assertNotIn("cursor", urls[1])
+
+    def test_repeating_cursor_cycle_stops_with_error(self):
+        responses = [
+            {"posts": [archive_post("p0", "2026-04-01")], "nextCursor": "A"},
+            {"posts": [archive_post("p1", "2026-03-01")], "nextCursor": "B"},
+            {"posts": [archive_post("p2", "2026-02-01")], "nextCursor": "A"},
+            {"posts": [archive_post("p3", "2026-01-01")], "nextCursor": "B"},
+        ]
+        with patch("builtins.print") as fake_print:
+            posts, urls = self.fetch(responses)
+
+        self.assertEqual([p["slug"] for p in posts], ["p0", "p1", "p2"])
+        self.assertEqual(len(urls), 3)
+        printed = " ".join(str(c.args[0]) for c in fake_print.call_args_list)
+        self.assertIn("pagination is not advancing", printed)
+
+
+class PublicationNameTests(unittest.TestCase):
+    def name_for(self, url):
+        with patch.object(subhoard, "SUBSTACK_URL", url):
+            return subhoard.publication_name()
+
+    def test_substack_subdomain(self):
+        self.assertEqual(self.name_for("https://example.substack.com"), "Example")
+
+    def test_custom_domain_ignores_www(self):
+        self.assertEqual(
+            self.name_for("https://www.astralcodexten.com/"), "Astralcodexten"
+        )
+
+    def test_custom_domain_without_www(self):
+        self.assertEqual(self.name_for("https://slowboring.com"), "Slowboring")
+
+    def test_hostname_is_case_insensitive(self):
+        self.assertEqual(self.name_for("https://WWW.Example.com"), "Example")
+
+    def test_digest_filename_uses_publication_name(self):
+        post = {
+            "title": "A post",
+            "subtitle": "",
+            "url": "https://www.example.com/p/a-post",
+            "date": "2026-01-01",
+            "body_md": "Body",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, ExitStack() as stack:
+            stack.enter_context(
+                patch.object(subhoard, "SUBSTACK_URL", "https://www.example.com")
+            )
+            stack.enter_context(
+                patch.object(subhoard, "DIGEST_OUTPUT_DIR", temp_dir)
+            )
+            stack.enter_context(patch("builtins.print"))
+            subhoard.write_digest_files({"2026": [post]})
+            self.assertEqual(os.listdir(temp_dir), ["Example_2026.md"])
+
+
 if __name__ == "__main__":
     unittest.main()

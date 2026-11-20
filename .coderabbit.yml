@@ -122,7 +122,7 @@ reviews:
 
     - path: "pyproject.toml"
       instructions: |
-        Check package metadata, Python 3.9 compatibility, console-script
+        Check package metadata, Python 3.11 compatibility, console-script
         behaviour, dependency compatibility, and consistency with README.md,
         requirements.txt, VERSION, and CI. Flag unnecessarily broad dependency
         additions or changes that make installation less reproducible.
