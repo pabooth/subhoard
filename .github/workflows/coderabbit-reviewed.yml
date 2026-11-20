@@ -1,23 +1,26 @@
 name: CodeRabbit Reviewed
 
+# The app's own "CodeRabbit" check reports "skipped" when no review happens,
+# and GitHub treats skipped as passing for required checks. This job waits
+# for that check on the PR head commit and passes only if it succeeded,
+# i.e. CodeRabbit actually reviewed the commit. A clean review does not
+# submit a GitHub review, so the reviews API cannot be used for this.
+
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  pull_request_review:
-    types: [submitted]
 
 permissions:
-  pull-requests: read
+  checks: read
 
 jobs:
   coderabbit-reviewed:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
     steps:
-      - name: Check CodeRabbit reviewed the latest commit
+      - name: Wait for CodeRabbit to review the head commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -32,19 +35,26 @@ jobs:
             exit 0
           fi
 
-          REVIEWED_SHAS=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
-            --jq '.[] | select(.user.login == "coderabbitai[bot]") | .commit_id')
+          # Poll for up to 20 minutes for the latest CodeRabbit check run.
+          for _ in $(seq 1 40); do
+            RUN=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs?check_name=CodeRabbit" \
+              --jq '[.check_runs[] | select(.app.slug == "coderabbitai")] | sort_by(.id) | last // empty
+                    | "\(.status) \(.conclusion) \(.output.title)"')
+            STATUS=${RUN%% *}
+            if [ "$STATUS" = "completed" ]; then
+              break
+            fi
+            echo "Waiting for CodeRabbit (${RUN:-no check run yet}) ..."
+            sleep 30
+          done
 
-          if [ -z "$REVIEWED_SHAS" ]; then
-            echo "No CodeRabbit review found on this PR (CodeRabbit may have hit a rate limit or skipped this PR)."
-            echo "Comment '@coderabbitai review' to request one."
-            exit 1
+          echo "CodeRabbit check on ${HEAD_SHA}: ${RUN:-none}"
+          CONCLUSION=$(echo "$RUN" | cut -d' ' -f2)
+          if [ "$STATUS" = "completed" ] && [ "$CONCLUSION" = "success" ]; then
+            echo "CodeRabbit reviewed the head commit. Check passed."
+            exit 0
           fi
 
-          if ! grep -qx "$HEAD_SHA" <<< "$REVIEWED_SHAS"; then
-            echo "CodeRabbit has not reviewed the latest commit (${HEAD_SHA})."
-            echo "Wait for its incremental review, or comment '@coderabbitai review' to request one."
-            exit 1
-          fi
-
-          echo "CodeRabbit has reviewed ${HEAD_SHA}. Check passed."
+          echo "CodeRabbit has not reviewed the head commit (it may have skipped or been rate-limited)."
+          echo "Comment '@coderabbitai review', wait for it to finish, then re-run this job."
+          exit 1
