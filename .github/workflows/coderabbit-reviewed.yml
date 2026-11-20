@@ -56,5 +56,6 @@ jobs:
           fi
 
           echo "CodeRabbit has not reviewed the head commit (it may have skipped or been rate-limited)."
-          echo "Comment '@coderabbitai review', wait for it to finish, then re-run this job."
+          echo "Comment '@coderabbitai full review', wait for it to finish, then re-run this job."
+          echo "('@coderabbitai review' does not re-review a commit CodeRabbit has already processed.)"
           exit 1
