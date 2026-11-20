@@ -19,15 +19,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          # Dependabot version bumps are covered by CI and CodeQL; CodeRabbit
-          # only sees the version string change, not the upstream code.
-          if [ "$PR_AUTHOR" = "dependabot[bot]" ]; then
-            echo "Dependabot PR: CodeRabbit review not required."
+          # CodeRabbit skips bot PRs (reviews.auto_review.ignore_usernames in
+          # .coderabbit.yml); dependency bumps are covered by CI and CodeQL.
+          if [ "$PR_AUTHOR_TYPE" = "Bot" ]; then
+            echo "PR opened by bot ${PR_AUTHOR}: CodeRabbit review not required."
             exit 0
           fi
 
