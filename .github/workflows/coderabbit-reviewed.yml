@@ -25,8 +25,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # CodeRabbit skips bot PRs (reviews.auto_review.ignore_usernames in
-          # .coderabbit.yml); dependency bumps are covered by CI and CodeQL.
+          # CodeRabbit skips PRs from bot accounts ("Bot user detected"), so
+          # don't require a review; dependency bumps are covered by CI and CodeQL.
           if [ "$PR_AUTHOR_TYPE" = "Bot" ]; then
             echo "PR opened by bot ${PR_AUTHOR}: CodeRabbit review not required."
             exit 0
