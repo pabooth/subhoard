@@ -7,6 +7,7 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
 ## [2.2.0] - 2026-11-19
 
 Fixed install steps and problem with Substack API
@@ -30,10 +31,10 @@ Fixed install steps and problem with Substack API
 
 ### Changed
 
-- Python 3.11 is now the minimum supported version (3.9 and 3.10 are end of
-  life). CI also tests Python 3.14.
+- Python 3.11 is now the minimum supported version (3.9 and 3.10 have reached
+  end of life). CI also tests Python 3.14.
 - Installation instructions use the latest release tag, explain what
-  `camoufox fetch` downloads, and finish with an install check.
+  `camoufox fetch` downloads, and finish with an installation check.
 - Subhoard is now installed into its own environment under
   `~/.local/share/subhoard` with the command linked into `~/.local/bin`, so
   it runs without activating a virtual environment or keeping the clone.

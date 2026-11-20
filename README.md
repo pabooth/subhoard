@@ -33,7 +33,7 @@ redistribute subscriber content without the publisher's permission.
 Install from the latest tagged release rather than the tip of `main`. Releases
 are the versions that have passed the full release checks.
 
-First check that `python3 --version` reports 3.11 or newer. On macOS the
+First check that `python3 --version` reports 3.11 or newer. On macOS, the
 built-in `/usr/bin/python3` is 3.9, which fails at the dependency step with
 "No matching distribution found". Install a current Python from
 [python.org](https://www.python.org/downloads/) or Homebrew, and if needed
