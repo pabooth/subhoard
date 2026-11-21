@@ -441,6 +441,12 @@ class ConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(outputs, ["pdf", "email"])
 
+    def test_html_output_is_a_separate_setting(self):
+        outputs, _ = self.configure_outputs(
+            "HTML_OUTPUT=true\n", ["--no-markdown"]
+        )
+        self.assertEqual(outputs, ["html"])
+
     def test_output_environment_overrides_config_file(self):
         outputs, _ = self.configure_outputs(
             "PDF_OUTPUT=true\n", environ={"SUBHOARD_PDF_OUTPUT": "false"}
@@ -780,6 +786,62 @@ class PublicationNameTests(unittest.TestCase):
             stack.enter_context(patch("builtins.print"))
             subhoard.write_markdown_files({"2026": [post]})
             self.assertEqual(os.listdir(temp_dir), ["Example_2026.md"])
+
+
+class HtmlExportTests(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.dir = temp_dir.name
+        for patcher in (
+            patch.object(subhoard, "HTML_OUTPUT_DIR", self.dir),
+            patch.object(subhoard, "SUBSTACK_URL", "https://example.substack.com"),
+            patch("builtins.print"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def read(self, name):
+        with open(os.path.join(self.dir, name), encoding="utf-8") as f:
+            return f.read()
+
+    def test_writes_one_html_file_per_year(self):
+        post = {
+            "title": "First & <Best>",
+            "subtitle": "A <subtitle>",
+            "url": "https://example.substack.com/p/first",
+            "date": "2026-01-02",
+            "html": "<p>Original <strong>HTML</strong></p>",
+            "markdown": "Original **HTML**",
+        }
+        older = dict(post, title="Older", date="2025-06-01")
+        subhoard.write_html_files({"2026": [post], "2025": [older]})
+
+        self.assertEqual(
+            sorted(os.listdir(self.dir)), ["Example_2025.html", "Example_2026.html"]
+        )
+        page = self.read("Example_2026.html")
+        self.assertIn("<title>Example — 2026</title>", page)
+        self.assertIn("1 posts", page)
+        self.assertIn("<h2>First &amp; &lt;Best&gt;</h2>", page)
+        self.assertIn("A &lt;subtitle&gt;", page)
+        self.assertIn("<p>Original <strong>HTML</strong></p>", page)
+        self.assertNotIn("Older", page)
+
+    def test_falls_back_to_markdown_without_cached_html(self):
+        post = {
+            "title": "Legacy",
+            "subtitle": "",
+            "url": "https://example.substack.com/p/legacy",
+            "date": "2024-01-01",
+            "html": None,
+            "markdown": "Some <text> & more",
+        }
+        empty = dict(post, title="Empty", markdown=None)
+        subhoard.write_html_files({"2024": [post, empty]})
+        page = self.read("Example_2024.html")
+        self.assertIn("<pre>Some &lt;text&gt; &amp; more</pre>", page)
+        self.assertIn("Content unavailable", page)
 
 
 def reportlab_available():

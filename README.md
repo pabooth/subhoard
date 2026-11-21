@@ -4,8 +4,8 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Version](https://img.shields.io/github/v/release/pabooth/subhoard)
 
-Subhoard archives a Substack publication to yearly Markdown files, PDFs, or
-HTML email. Public posts work without credentials. Subscriber content can be
+Subhoard archives a Substack publication to yearly Markdown, PDF, or HTML
+files, or as HTML email. Public posts work without credentials. Subscriber content can be
 archived using a browser session exported by a user who is authorized to
 access it.
 
@@ -14,7 +14,7 @@ redistribute subscriber content without the publisher's permission.
 
 ## Features
 
-- Markdown and PDF archives grouped by year
+- Markdown, PDF and HTML archives grouped by year
 - HTML email delivery through any standard SMTP provider
 - Public-only mode with no cookies
 - Optional subscriber-content mode using an exported Substack session
@@ -104,7 +104,8 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Subhoard writes its cache and output to the directory you run it from,
-unless `--cache-dir`, `--markdown-dir`, or `--pdf-dir` say otherwise.
+unless `--cache-dir`, `--markdown-dir`, `--pdf-dir`, or `--html-dir` say
+otherwise.
 
 ### Updating
 
@@ -186,6 +187,7 @@ Each output is turned on or off separately:
 |----------|----------------------------|-------------------|---------|-------------------------------------|
 | Markdown | `--markdown/--no-markdown` | `MARKDOWN_OUTPUT` | on      | One `.md` file per year             |
 | PDF      | `--pdf/--no-pdf`           | `PDF_OUTPUT`      | off     | One PDF per year                    |
+| HTML     | `--html/--no-html`         | `HTML_OUTPUT`     | off     | One `.html` file per year           |
 | Email    | `--email/--no-email`       | `EMAIL_OUTPUT`    | off     | One email per post (see below)      |
 
 Settings take `true` or `false` (`yes`/`no`, `on`/`off` and `1`/`0` also
@@ -193,6 +195,10 @@ work) in the [config file](#config-file) or as `SUBHOARD_*`
 [environment variables](#environment-variables). A flag overrides only its
 own output, so `--pdf` adds PDF to whatever the config file turns on, and
 `--no-markdown` turns Markdown off for one run.
+
+The Markdown and PDF files are built from a simplified Markdown copy of each
+post. The HTML files and emails use the post's original HTML, so they keep
+its formatting, links and images more faithfully.
 
 Every run fetches posts into the cache first and builds the outputs from it.
 **With every output turned off, Subhoard only fetches posts into the cache**
@@ -288,6 +294,7 @@ precedence over the config file.
 | `SUBHOARD_URL`            | Publication root URL                             |
 | `SUBHOARD_MARKDOWN_OUTPUT` | `true` or `false`: yearly Markdown files         |
 | `SUBHOARD_PDF_OUTPUT`     | `true` or `false`: yearly PDF files              |
+| `SUBHOARD_HTML_OUTPUT`    | `true` or `false`: yearly HTML files             |
 | `SUBHOARD_EMAIL_OUTPUT`   | `true` or `false`: one email per post            |
 | `SUBHOARD_FREE_ONLY`      | `false` to include subscriber content            |
 | `SUBHOARD_COOKIES_FILE`   | Cookie export path                               |
@@ -297,6 +304,7 @@ precedence over the config file.
 | `SUBHOARD_CACHE_DIR`      | Resumable cache directory (empty disables it)    |
 | `SUBHOARD_MARKDOWN_DIR`   | Markdown output directory                        |
 | `SUBHOARD_PDF_DIR`        | PDF output directory                             |
+| `SUBHOARD_HTML_DIR`       | HTML output directory                            |
 | `SUBHOARD_LOG_FILE`       | Optional log path                                |
 | `SUBHOARD_SMTP_HOST`      | SMTP hostname                                    |
 | `SUBHOARD_SMTP_PORT`      | SMTP port                                        |
@@ -308,11 +316,13 @@ precedence over the config file.
 
 ## Local data
 
-By default, Subhoard creates:
+By default, Subhoard creates the cache and a directory for each output that
+is on:
 
 - `post_cache/` for resumable content
 - `digest_export/` for Markdown
 - `pdf_export/` for PDF files
+- `html_export/` for HTML files
 
 These paths are ignored by Git and created with owner-only permissions on
 POSIX systems. They may contain subscriber content, so handle backups and

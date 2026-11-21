@@ -9,6 +9,7 @@ post_cache/
 notebooklm_export/
 digest_export/
 pdf_export/
+html_export/
 *.log
 .coverage
 .pytest_cache/

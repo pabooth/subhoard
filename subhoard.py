@@ -56,6 +56,7 @@ FROM_ADDRESS = ""
 TO_ADDRESS = ""
 MARKDOWN_OUTPUT_DIR = "digest_export"
 PDF_OUTPUT_DIR = "pdf_export"
+HTML_OUTPUT_DIR = "html_export"
 CACHE_DIR = "post_cache"
 START_DATE = None
 FETCH_DELAY = 1.0
@@ -67,9 +68,9 @@ LOG_FILE = None
 # variable name without its prefix; environment variables take precedence.
 DEFAULT_CONFIG_FILE = "~/.shconfig"
 CONFIG_KEYS = frozenset({
-    "URL", "MARKDOWN_OUTPUT", "PDF_OUTPUT", "EMAIL_OUTPUT", "FREE_ONLY",
-    "COOKIES_FILE", "START_DATE", "FETCH_DELAY", "EMAIL_DELAY", "CACHE_DIR",
-    "MARKDOWN_DIR", "PDF_DIR", "LOG_FILE",
+    "URL", "MARKDOWN_OUTPUT", "PDF_OUTPUT", "HTML_OUTPUT", "EMAIL_OUTPUT",
+    "FREE_ONLY", "COOKIES_FILE", "START_DATE", "FETCH_DELAY", "EMAIL_DELAY",
+    "CACHE_DIR", "MARKDOWN_DIR", "PDF_DIR", "HTML_DIR", "LOG_FILE",
     "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD",
     "SMTP_SECURITY", "FROM_ADDRESS", "TO_ADDRESS",
 })
@@ -78,7 +79,7 @@ CONFIG_KEYS = frozenset({
 DEPRECATED_CONFIG_KEYS = frozenset({"OUTPUT", "DIGEST_DIR"})
 FILE_CONFIG = {}
 # Each output and whether it is on by default, in the order they are written.
-OUTPUT_DEFAULTS = {"markdown": True, "pdf": False, "email": False}
+OUTPUT_DEFAULTS = {"markdown": True, "pdf": False, "html": False, "email": False}
 # Old output names still accepted by the deprecated OUTPUT setting.
 LEGACY_OUTPUT_NAMES = {"digest": "markdown"}
 BOOLEAN_VALUES = {
@@ -165,7 +166,7 @@ def build_parser():
         prog="subhoard",
         description=(
             "Archive a Substack publication you are authorized to access "
-            "as Markdown, PDF, or email."
+            "as Markdown, PDF, HTML, or email."
         ),
         epilog=(
             "With every output turned off, Subhoard only fetches posts into "
@@ -209,6 +210,14 @@ def build_parser():
         help="Write yearly PDF files (default: off; env: SUBHOARD_PDF_OUTPUT).",
     )
     outputs.add_argument(
+        "--html",
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Write yearly HTML files (default: off; "
+            "env: SUBHOARD_HTML_OUTPUT)."
+        ),
+    )
+    outputs.add_argument(
         "--email",
         action=argparse.BooleanOptionalAction,
         help=(
@@ -220,7 +229,7 @@ def build_parser():
         action="append",
         choices=("markdown", "digest", "pdf", "email"),
         dest="outputs",
-        help="Deprecated: use --markdown, --pdf and --email.",
+        help="Deprecated: use --markdown, --pdf, --html and --email.",
     )
     access = parser.add_mutually_exclusive_group()
     access.add_argument(
@@ -273,6 +282,10 @@ def build_parser():
     parser.add_argument(
         "--pdf-dir",
         default=env("PDF_DIR", "pdf_export"),
+    )
+    parser.add_argument(
+        "--html-dir",
+        default=env("HTML_DIR", "html_export"),
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--log-file", default=env("LOG_FILE"))
@@ -443,8 +456,8 @@ def configure_from_args(args, parser):
     """Apply parsed CLI settings to the module's runtime configuration."""
     global CACHE_DIR, COOKIES_FILE, MARKDOWN_OUTPUT_DIR, DRY_RUN, EMAIL_DELAY
     global FETCH_DELAY, FREE_ONLY, FROM_ADDRESS, LOG_FILE, OUTPUT_MODE
-    global PDF_OUTPUT_DIR, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT, SMTP_SECURITY
-    global SMTP_USERNAME
+    global HTML_OUTPUT_DIR, PDF_OUTPUT_DIR, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT
+    global SMTP_SECURITY, SMTP_USERNAME
     global START_DATE, SUBSTACK_URL, TO_ADDRESS
 
     outputs = resolve_outputs(args, parser)
@@ -468,6 +481,7 @@ def configure_from_args(args, parser):
     CACHE_DIR = args.cache_dir
     MARKDOWN_OUTPUT_DIR = markdown_dir
     PDF_OUTPUT_DIR = args.pdf_dir
+    HTML_OUTPUT_DIR = args.html_dir
     DRY_RUN = args.dry_run
     LOG_FILE = args.log_file
     SMTP_HOST = args.smtp_host
@@ -1038,58 +1052,89 @@ def html_to_markdown(soup_element):
     return "\n".join(lines).strip()
 
 
-def build_email_html(post, body_html):
-    """Wrap a post's HTML body in a styled email-ready HTML document."""
-    pub_name = publication_name()
-    title = html.escape(post["title"])
-    subtitle = html.escape(post["subtitle"])
-    post_url = html.escape(post["url"], quote=True)
+ARCHIVE_CSS = """
+  body {
+    font-family: Georgia, serif; max-width: 680px;
+    margin: 0 auto; padding: 2em 1em;
+    color: #1a1a1a; background: #fff;
+  }
+  h1 { font-size: 1.8em; margin: 0 0 0.25em 0; line-height: 1.3; }
+  .meta {
+    font-size: 0.85em; color: #888; margin-bottom: 2em;
+    border-bottom: 1px solid #eee; padding-bottom: 1em;
+  }
+  .meta a { color: #888; }
+  img { max-width: 100%; height: auto; }
+  blockquote {
+    border-left: 3px solid #ddd; margin: 1.5em 0;
+    padding: 0.5em 1em; color: #555;
+  }
+  a { color: #1a56db; }
+  pre { white-space: pre-wrap; }
+  article + article {
+    margin-top: 3em; padding-top: 2em; border-top: 2px solid #ddd;
+  }
+  .footer {
+    margin-top: 3em; padding-top: 1em;
+    border-top: 1px solid #eee; font-size: 0.8em; color: #aaa;
+  }
+"""
+
+
+def html_document(title, content):
+    """Wrap HTML content in a standalone, styled page.
+
+    ``title`` and ``content`` must already be escaped.
+    """
     publication_url = html.escape(SUBSTACK_URL, quote=True)
-    subtitle_block = (
-        f"<p style='color:#666;font-size:1.1em;margin:0 0 1.5em 0'>{subtitle}</p>"
-        if post["subtitle"] else ""
-    )
-    post_date = html.escape(post["date"])
     return f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  body {{
-    font-family: Georgia, serif; max-width: 680px;
-    margin: 0 auto; padding: 2em 1em;
-    color: #1a1a1a; background: #fff;
-  }}
-  h1 {{ font-size: 1.8em; margin: 0 0 0.25em 0; line-height: 1.3; }}
-  .meta {{
-    font-size: 0.85em; color: #888; margin-bottom: 2em;
-    border-bottom: 1px solid #eee; padding-bottom: 1em;
-  }}
-  .meta a {{ color: #888; }}
-  img {{ max-width: 100%; height: auto; }}
-  blockquote {{
-    border-left: 3px solid #ddd; margin: 1.5em 0;
-    padding: 0.5em 1em; color: #555;
-  }}
-  a {{ color: #1a56db; }}
-  .footer {{
-    margin-top: 3em; padding-top: 1em;
-    border-top: 1px solid #eee; font-size: 0.8em; color: #aaa;
-  }}
-</style>
+<title>{title}</title>
+<style>{ARCHIVE_CSS}</style>
 </head>
 <body>
-  <h1>{title}</h1>
-  {subtitle_block}
-  <div class="meta">
-    {pub_name} &middot; {post_date} &middot; <a href="{post_url}">View original</a>
-  </div>
-  {body_html}
+{content}
   <div class="footer">Archived from
     <a href="{publication_url}">{publication_url}</a></div>
 </body>
 </html>"""
+
+
+def post_html(post, body_html, heading="h1"):
+    """Return a post's title, subtitle, details line and body as HTML.
+
+    Falls back to the cached Markdown, shown as plain text, for posts cached
+    without HTML.
+    """
+    pub_name = html.escape(publication_name())
+    title = html.escape(post["title"])
+    subtitle = html.escape(post.get("subtitle") or "")
+    post_url = html.escape(post["url"], quote=True)
+    subtitle_block = (
+        f"<p style='color:#666;font-size:1.1em;margin:0 0 1.5em 0'>{subtitle}</p>"
+        if subtitle else ""
+    )
+    post_date = html.escape(post["date"])
+    if not body_html:
+        markdown = post.get("markdown")
+        body_html = (
+            f"<pre>{html.escape(markdown)}</pre>" if markdown
+            else "<p><em>Content unavailable.</em></p>"
+        )
+    return f"""  <{heading}>{title}</{heading}>
+  {subtitle_block}
+  <div class="meta">
+    {pub_name} &middot; {post_date} &middot; <a href="{post_url}">View original</a>
+  </div>
+  {body_html}"""
+
+
+def build_email_html(post, body_html):
+    """Wrap a post's HTML body in a styled email-ready HTML document."""
+    return html_document(html.escape(post["title"]), post_html(post, body_html))
 
 
 def connect_smtp():
@@ -1206,6 +1251,29 @@ def write_markdown_files(yearly_posts):
 
 # Former name, kept for existing integrations.
 write_digest_files = write_markdown_files
+
+
+def write_html_files(yearly_posts):
+    """Write one HTML file per year into HTML_OUTPUT_DIR."""
+    make_private_directory(HTML_OUTPUT_DIR)
+    pub_name = publication_name()
+
+    for year in sorted(yearly_posts.keys()):
+        posts = yearly_posts[year]
+        filename = os.path.join(HTML_OUTPUT_DIR, f"{pub_name}_{year}.html")
+        title = html.escape(f"{pub_name} — {year}")
+        articles = "\n".join(
+            f"<article>\n{post_html(post, post.get('html'), 'h2')}\n</article>"
+            for post in posts
+        )
+        content = (
+            f"  <h1>{title}</h1>\n"
+            f"  <div class=\"meta\">{len(posts)} posts</div>\n{articles}"
+        )
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(html_document(title, content))
+        make_private_file(filename)
+        print(f"  Written: {filename} ({len(posts)} posts)")
 
 
 def write_pdf_files(yearly_posts):
@@ -1569,7 +1637,7 @@ def main(argv=None):
         smtp.quit()
 
     # Assemble output files from cache (covers both fresh runs and resumed runs)
-    if "markdown" in OUTPUT_MODE or "pdf" in OUTPUT_MODE:
+    if {"markdown", "pdf", "html"} & set(OUTPUT_MODE):
         yearly_posts = load_all_cached_posts(posts_ordered)
 
         if "markdown" in OUTPUT_MODE:
@@ -1579,6 +1647,10 @@ def main(argv=None):
         if "pdf" in OUTPUT_MODE:
             print(f"\nWriting PDF files to '{PDF_OUTPUT_DIR}/' ...")
             write_pdf_files(yearly_posts)
+
+        if "html" in OUTPUT_MODE:
+            print(f"\nWriting HTML files to '{HTML_OUTPUT_DIR}/' ...")
+            write_html_files(yearly_posts)
 
     total = len(posts_ordered)
     done  = total - len(failed)

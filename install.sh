@@ -200,6 +200,8 @@ URL=
 MARKDOWN_OUTPUT=true
 # Yearly PDF files in PDF_DIR
 PDF_OUTPUT=false
+# Yearly HTML files in HTML_DIR, keeping the original formatting
+HTML_OUTPUT=false
 # Each post as an email, using the settings under Email output
 EMAIL_OUTPUT=false
 # true archives public posts only; false also archives subscriber content
@@ -217,6 +219,7 @@ EMAIL_DELAY=0.5
 CACHE_DIR=post_cache
 MARKDOWN_DIR=digest_export
 PDF_DIR=pdf_export
+HTML_DIR=html_export
 LOG_FILE=
 
 # Email output
