@@ -196,8 +196,8 @@ template = """\
 URL=
 # Outputs, each true or false. With all of them false, Subhoard only
 # fetches posts into CACHE_DIR, ready to build outputs from later.
-# Email each post (the main use): set true once the settings under
-# Email output below are filled in
+# Email each post: set true once the settings under Email output below
+# are filled in
 EMAIL_OUTPUT=false
 # Markdown files in MARKDOWN_DIR
 MARKDOWN_OUTPUT=true
