@@ -31,8 +31,9 @@ abspath() {
 
 SUBHOARD_HOME="$(abspath "${SUBHOARD_HOME:-$HOME/.local/share/subhoard}")"
 SUBHOARD_BIN_DIR="$(abspath "${SUBHOARD_BIN_DIR:-$HOME/.local/bin}")"
-SUBHOARD_CONFIG="${SUBHOARD_CONFIG:-$HOME/.shconfig}"
-SUBHOARD_CONFIG="$(abspath "${SUBHOARD_CONFIG/#\~/$HOME}")"
+# Expanded later by create_config, the same way Subhoard expands it.
+SUBHOARD_CONFIG="${SUBHOARD_CONFIG:-~/.shconfig}"
+CALLER_DIR="$PWD"
 if [[ -n "${PYTHON:-}" && "$PYTHON" == */* ]]; then
     PYTHON="$(abspath "$PYTHON")"
 fi
@@ -173,23 +174,36 @@ a dedicated directory, or install Python 3.11 or newer."
 }
 
 # Create an empty config file for the user to fill in. It may later hold
-# SMTP_PASSWORD, so it is readable only by its owner. An existing file (or a
-# symlink, even a dangling one) is left untouched.
+# SMTP_PASSWORD, so it is readable only by its owner. The installed Python
+# expands ~ and ~user exactly as Subhoard's loader does, resolves relative
+# paths against the caller's directory, and creates the file with O_EXCL so
+# an existing entry, including a symlink, is never followed or changed.
 create_config() {
-    if [[ -e "$SUBHOARD_CONFIG" || -L "$SUBHOARD_CONFIG" ]]; then
-        echo "Keeping existing config file $SUBHOARD_CONFIG"
-        return
-    fi
-    step "Creating config file $SUBHOARD_CONFIG"
-    mkdir -p "$(dirname "$SUBHOARD_CONFIG")"
-    (
-        umask 077
-        cat > "$SUBHOARD_CONFIG" <<'CONFIG'
-# Subhoard settings, one KEY=VALUE per line. Run `subhoard --help` or see
-# the README for the available keys. Command-line arguments and SUBHOARD_*
-# environment variables take precedence over this file.
-CONFIG
-    )
+    "$VENV/bin/python" - "$CALLER_DIR" "$SUBHOARD_CONFIG" <<'PY'
+import os
+import sys
+
+caller_dir, raw = sys.argv[1:]
+path = os.path.join(caller_dir, os.path.expanduser(raw))
+header = (
+    "# Subhoard settings, one KEY=VALUE per line. Run `subhoard --help` or see\n"
+    "# the README for the available keys. Command-line arguments and SUBHOARD_*\n"
+    "# environment variables take precedence over this file.\n"
+)
+try:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+except FileExistsError:
+    print(f"Keeping existing config file {path}")
+    sys.exit(0)
+except OSError as exc:
+    print(f"warning: could not create config file {path}: {exc.strerror}",
+          file=sys.stderr)
+    sys.exit(0)
+with os.fdopen(fd, "w", encoding="utf-8") as config_file:
+    config_file.write(header)
+print(f"\n==> Created config file {path}")
+PY
 }
 
 uninstall() {
