@@ -320,6 +320,28 @@ class ContentSecurityTests(unittest.TestCase):
         subhoard.BeautifulSoup is None,
         "beautifulsoup4 is not installed",
     )
+    def test_unparseable_urls_are_removed_without_failing_export(self):
+        post = {
+            "title": "T",
+            "subtitle": "",
+            "url": "https://example.substack.com/p/t",
+            "date": "2026-01-01",
+        }
+        body = (
+            '<p>Before <a href="h ttps://[">broken</a> '
+            '<img src="https://[::1"> '
+            '<a href="https://example.com/">fine</a> after</p>'
+        )
+        with patch.object(subhoard, "SUBSTACK_URL", "https://example.substack.com"):
+            rendered = subhoard.post_html(post, body)
+        self.assertIn("Before <a>broken</a>", rendered)
+        self.assertNotIn("[", rendered)
+        self.assertIn('<a href="https://example.com/">fine</a> after', rendered)
+
+    @unittest.skipIf(
+        subhoard.BeautifulSoup is None,
+        "beautifulsoup4 is not installed",
+    )
     def test_active_document_elements_are_removed_on_export(self):
         cached_html = (
             '<meta http-equiv="refresh" content="0; URL=https://attacker.example/">'

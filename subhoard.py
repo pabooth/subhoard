@@ -1055,12 +1055,15 @@ def sanitise_content(content):
             # Browsers ignore control characters and spaces in a URL's
             # scheme, and some Python 3.11 releases do not strip them.
             checked = re.sub(r"[\x00-\x20\x7f]", "", value or "")
-            if checked and urlparse(checked).scheme.lower() in {
-                "javascript",
-                "vbscript",
-                "data",
-                "file",
-            }:
+            if not checked:
+                continue
+            try:
+                scheme = urlparse(checked).scheme.lower()
+            except ValueError:
+                # Unparseable, such as an unmatched "[": not worth keeping.
+                del element.attrs[attribute]
+                continue
+            if scheme in {"javascript", "vbscript", "data", "file"}:
                 del element.attrs[attribute]
 
 
