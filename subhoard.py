@@ -98,9 +98,11 @@ def parse_config_file(path):
             if line.startswith("export "):
                 line = line[len("export "):].lstrip()
             key, sep, value = line.partition("=")
-            if not sep:
+            key = key.strip()
+            # Never echo a malformed key: it may hold part of a secret.
+            if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
                 raise ValueError(f"{path}:{number}: expected KEY=VALUE")
-            key = key.strip().upper()
+            key = key.upper()
             key = key.removeprefix("SUBHOARD_")
             if key not in CONFIG_KEYS:
                 raise ValueError(f"{path}:{number}: unknown setting {key}")
@@ -139,21 +141,13 @@ def load_config(argv=None):
     return path
 
 
-def env_float(name, default):
-    """Read a numeric environment setting with an argparse-friendly error."""
-    value = env(name)
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"SUBHOARD_{name} must be a number"
-        ) from exc
-
-
 def build_parser():
-    """Build the CLI argument parser."""
+    """Build the CLI argument parser.
+
+    Numeric defaults are passed as strings so argparse converts them only
+    when no command-line flag overrides them, reporting bad values as
+    ordinary usage errors.
+    """
     parser = argparse.ArgumentParser(
         prog="subhoard",
         description=(
@@ -211,12 +205,12 @@ def build_parser():
     parser.add_argument(
         "--fetch-delay",
         type=float,
-        default=env_float("FETCH_DELAY", 1.0),
+        default=env("FETCH_DELAY", "1.0"),
     )
     parser.add_argument(
         "--email-delay",
         type=float,
-        default=env_float("EMAIL_DELAY", 0.5),
+        default=env("EMAIL_DELAY", "0.5"),
     )
     parser.add_argument(
         "--cache-dir",
@@ -245,7 +239,7 @@ def build_parser():
     email_group.add_argument(
         "--smtp-port",
         type=int,
-        default=int(env("SMTP_PORT", "587")),
+        default=env("SMTP_PORT", "587"),
     )
     email_group.add_argument(
         "--smtp-username",
