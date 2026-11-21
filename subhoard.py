@@ -765,7 +765,7 @@ def load_all_cached_posts(posts=None):
             if path
         }
 
-    yearly = defaultdict(list)
+    loaded = []
     seen_posts = set()
     for fname in sorted(os.listdir(CACHE_DIR)):
         if not fname.endswith(".json"):
@@ -780,10 +780,18 @@ def load_all_cached_posts(posts=None):
             if identity in seen_posts:
                 continue
             seen_posts.add(identity)
-            year = post.get("date", "")[:4] or "unknown"
-            yearly[year].append(post)
+            loaded.append(post)
         except (OSError, json.JSONDecodeError, AttributeError):
             pass
+    return group_by_year(loaded)
+
+
+def group_by_year(posts):
+    """Group post dicts by year, each year in chronological order."""
+    yearly = defaultdict(list)
+    for post in posts:
+        year = (post.get("date") or "")[:4] or "unknown"
+        yearly[year].append(post)
     for posts_in_year in yearly.values():
         posts_in_year.sort(
             key=lambda post: (post.get("date", ""), post.get("title", ""))
@@ -1592,6 +1600,8 @@ def main(argv=None):
 
     posts_ordered = list(reversed(posts))
     failed = []
+    # Fetched content, for building outputs when there is no cache to read.
+    fetched = []
 
     if CACHE_DIR:
         make_private_directory(CACHE_DIR)
@@ -1671,6 +1681,7 @@ def main(argv=None):
 
         # Write to cache immediately — before any output action
         save_to_cache(post, body_md, body_html)
+        fetched.append({**post, "markdown": body_md, "html": body_html})
 
         if "email" in OUTPUT_MODE:
             try:
@@ -1696,7 +1707,10 @@ def main(argv=None):
 
     # Assemble output files from cache (covers both fresh runs and resumed runs)
     if {"markdown", "pdf", "html"} & set(OUTPUT_MODE):
-        yearly_posts = load_all_cached_posts(posts_ordered)
+        if CACHE_DIR:
+            yearly_posts = load_all_cached_posts(posts_ordered)
+        else:
+            yearly_posts = group_by_year(fetched)
 
         if "markdown" in OUTPUT_MODE:
             print(f"\nWriting Markdown files to '{MARKDOWN_OUTPUT_DIR}/' ...")

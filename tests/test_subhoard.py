@@ -87,6 +87,18 @@ class CacheTests(unittest.TestCase):
             ["Older", "Newer"],
         )
 
+    def test_group_by_year_without_cache(self):
+        posts = [
+            {"title": "B", "date": "2025-02-01"},
+            {"title": "A", "date": "2025-01-01"},
+            {"title": "Old", "date": "2024-12-31"},
+            {"title": "Undated", "date": ""},
+        ]
+        yearly = subhoard.group_by_year(posts)
+        self.assertEqual([p["title"] for p in yearly["2025"]], ["A", "B"])
+        self.assertEqual([p["title"] for p in yearly["2024"]], ["Old"])
+        self.assertEqual([p["title"] for p in yearly["unknown"]], ["Undated"])
+
     def test_invalid_json_cache_is_ignored(self):
         post = {
             "title": "Broken",
