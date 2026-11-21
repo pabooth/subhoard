@@ -844,6 +844,87 @@ class HtmlExportTests(unittest.TestCase):
         self.assertIn("Content unavailable", page)
 
 
+class PerPostExportTests(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.dir = temp_dir.name
+        for patcher in (
+            patch.object(subhoard, "PER_POST", True),
+            patch.object(subhoard, "MARKDOWN_OUTPUT_DIR", self.dir),
+            patch.object(subhoard, "HTML_OUTPUT_DIR", self.dir),
+            patch.object(subhoard, "SUBSTACK_URL", "https://example.substack.com"),
+            patch("builtins.print"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.posts = {
+            "2024": [{
+                "title": "First",
+                "subtitle": "Sub",
+                "url": "https://example.substack.com/p/first-post",
+                "slug": "first-post",
+                "date": "2024-03-15",
+                "markdown": "First body",
+                "html": "<p>First body</p>",
+            }],
+            "2025": [{
+                "title": "Odd / name",
+                "subtitle": "",
+                "url": "https://example.substack.com/p/../../escape",
+                "date": "2025-01-02",
+                "markdown": "Second body",
+                "html": None,
+            }],
+        }
+
+    def files(self):
+        return sorted(
+            os.path.relpath(os.path.join(root, name), self.dir)
+            for root, _, names in os.walk(self.dir)
+            for name in names
+        )
+
+    def test_markdown_writes_one_file_per_post_in_year_folders(self):
+        subhoard.write_markdown_files(self.posts)
+        self.assertEqual(self.files(), [
+            os.path.join("2024", "2024-03-15-first-post.md"),
+            os.path.join("2025", "2025-01-02-escape.md"),
+        ])
+        path = os.path.join(self.dir, "2024", "2024-03-15-first-post.md")
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertTrue(text.startswith("# First\n\n*Sub*"))
+        self.assertIn("First body", text)
+
+    def test_html_writes_one_page_per_post(self):
+        subhoard.write_html_files(self.posts)
+        path = os.path.join(self.dir, "2024", "2024-03-15-first-post.html")
+        with open(path, encoding="utf-8") as f:
+            page = f.read()
+        self.assertIn("<title>First</title>", page)
+        self.assertIn("<h1>First</h1>", page)
+        self.assertIn("<p>First body</p>", page)
+
+    def test_post_filenames_are_safe(self):
+        post = {"title": "../../etc/passwd", "date": "../2024-01-01", "url": ""}
+        name = subhoard.post_filename(post, "md")
+        self.assertNotIn("/", name)
+        self.assertNotIn("..", name)
+        self.assertEqual(subhoard.safe_filename("../", "unknown"), "unknown")
+
+    def test_per_post_setting(self):
+        config = {"PER_POST": "true"}
+        with patch.dict(subhoard.FILE_CONFIG, config, clear=True):
+            parser = subhoard.build_parser()
+            subhoard.configure_from_args(parser.parse_args(["--dry-run"]), parser)
+            self.assertTrue(subhoard.PER_POST)
+            subhoard.configure_from_args(
+                parser.parse_args(["--dry-run", "--no-per-post"]), parser
+            )
+            self.assertFalse(subhoard.PER_POST)
+
+
 def reportlab_available():
     try:
         import reportlab  # noqa: F401
@@ -880,6 +961,27 @@ class PdfExportTests(unittest.TestCase):
                 sorted(os.listdir(temp_dir)), ["Example_2025.pdf", "Example_2026.pdf"]
             )
             with open(os.path.join(temp_dir, "Example_2026.pdf"), "rb") as f:
+                self.assertEqual(f.read(5), b"%PDF-")
+
+    def test_writes_one_pdf_per_post_with_per_post(self):
+        post = {
+            "title": "Only",
+            "subtitle": "",
+            "url": "https://example.substack.com/p/only",
+            "slug": "only",
+            "date": "2026-01-02",
+            "markdown": "Body",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, ExitStack() as stack:
+            stack.enter_context(patch.object(subhoard, "PDF_OUTPUT_DIR", temp_dir))
+            stack.enter_context(patch.object(subhoard, "PER_POST", True))
+            stack.enter_context(
+                patch.object(subhoard, "SUBSTACK_URL", "https://example.substack.com")
+            )
+            stack.enter_context(patch("builtins.print"))
+            subhoard.write_pdf_files({"2026": [post]})
+            path = os.path.join(temp_dir, "2026", "2026-01-02-only.pdf")
+            with open(path, "rb") as f:
                 self.assertEqual(f.read(5), b"%PDF-")
 
 

@@ -62,6 +62,7 @@ START_DATE = None
 FETCH_DELAY = 1.0
 EMAIL_DELAY = 0.5
 DRY_RUN = False
+PER_POST = False
 LOG_FILE = None
 
 # Settings read from the config file. Each key is a SUBHOARD_* environment
@@ -70,7 +71,7 @@ DEFAULT_CONFIG_FILE = "~/.shconfig"
 CONFIG_KEYS = frozenset({
     "URL", "MARKDOWN_OUTPUT", "PDF_OUTPUT", "HTML_OUTPUT", "EMAIL_OUTPUT",
     "FREE_ONLY", "COOKIES_FILE", "START_DATE", "FETCH_DELAY", "EMAIL_DELAY",
-    "CACHE_DIR", "MARKDOWN_DIR", "PDF_DIR", "HTML_DIR", "LOG_FILE",
+    "CACHE_DIR", "MARKDOWN_DIR", "PDF_DIR", "HTML_DIR", "PER_POST", "LOG_FILE",
     "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD",
     "SMTP_SECURITY", "FROM_ADDRESS", "TO_ADDRESS",
 })
@@ -222,6 +223,15 @@ def build_parser():
         action=argparse.BooleanOptionalAction,
         help=(
             "Email each post (default: off; env: SUBHOARD_EMAIL_OUTPUT)."
+        ),
+    )
+    outputs.add_argument(
+        "--per-post",
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Write Markdown, PDF and HTML as one file per post in a folder per "
+            "year, instead of one file per year (default: off; "
+            "env: SUBHOARD_PER_POST)."
         ),
     )
     outputs.add_argument(
@@ -457,7 +467,7 @@ def configure_from_args(args, parser):
     global CACHE_DIR, COOKIES_FILE, MARKDOWN_OUTPUT_DIR, DRY_RUN, EMAIL_DELAY
     global FETCH_DELAY, FREE_ONLY, FROM_ADDRESS, LOG_FILE, OUTPUT_MODE
     global HTML_OUTPUT_DIR, PDF_OUTPUT_DIR, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT
-    global SMTP_SECURITY, SMTP_USERNAME
+    global PER_POST, SMTP_SECURITY, SMTP_USERNAME
     global START_DATE, SUBSTACK_URL, TO_ADDRESS
 
     outputs = resolve_outputs(args, parser)
@@ -470,6 +480,9 @@ def configure_from_args(args, parser):
         free_only = parse_bool(env("FREE_ONLY"), "FREE_ONLY", parser)
     if free_only is None:
         free_only = True
+    per_post = args.per_post
+    if per_post is None:
+        per_post = parse_bool(env("PER_POST"), "PER_POST", parser) or False
 
     SUBSTACK_URL = args.url
     OUTPUT_MODE = outputs
@@ -483,6 +496,7 @@ def configure_from_args(args, parser):
     PDF_OUTPUT_DIR = args.pdf_dir
     HTML_OUTPUT_DIR = args.html_dir
     DRY_RUN = args.dry_run
+    PER_POST = per_post
     LOG_FILE = args.log_file
     SMTP_HOST = args.smtp_host
     SMTP_PORT = args.smtp_port
@@ -1222,31 +1236,78 @@ def deliver_email(smtp, post, html_content):
         return replacement
 
 
-def write_markdown_files(yearly_posts):
-    """Write one Markdown file per year into MARKDOWN_OUTPUT_DIR."""
-    make_private_directory(MARKDOWN_OUTPUT_DIR)
-    pub_name = publication_name()
+def safe_filename(text, fallback="post"):
+    """Reduce untrusted text to a short name safe to use as a path component."""
+    return re.sub(r"[^\w\-]", "_", str(text or ""))[:80].strip("_") or fallback
 
+
+def post_filename(post, extension):
+    """Return a per-post file name such as ``2024-03-15-post-slug.pdf``."""
+    slug = safe_filename(
+        post.get("slug")
+        or post.get("url", "").rstrip("/").split("/")[-1]
+        or post.get("title")
+    )
+    date = re.sub(r"[^0-9\-]", "", post.get("date") or "")[:10]
+    return f"{date}-{slug}.{extension}" if date else f"{slug}.{extension}"
+
+
+def output_files(directory, yearly_posts, extension):
+    """Yield (path, title, posts, year) for each file an output writes.
+
+    Normally there is one file per year holding that year's posts. With
+    PER_POST there is one file per post, in a folder per year.
+    """
+    make_private_directory(directory)
+    pub_name = publication_name()
     for year in sorted(yearly_posts.keys()):
         posts = yearly_posts[year]
-        filename = os.path.join(MARKDOWN_OUTPUT_DIR, f"{pub_name}_{year}.md")
+        if not PER_POST:
+            path = os.path.join(directory, f"{pub_name}_{year}.{extension}")
+            yield path, f"{pub_name} — {year}", posts, year
+            continue
+        year_dir = os.path.join(directory, safe_filename(year, "unknown"))
+        make_private_directory(year_dir)
+        for post in posts:
+            path = os.path.join(year_dir, post_filename(post, extension))
+            yield path, post["title"], [post], year
 
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(f"# {pub_name} — {year}\n\n")
-            f.write(f"*{len(posts)} posts*\n\n")
-            f.write("---\n\n")
 
-            for post in posts:
-                f.write(f"## {post['title']}\n\n")
-                if post["subtitle"]:
-                    f.write(f"*{post['subtitle']}*\n\n")
-                f.write(f"**Date:** {post['date']}  \n")
-                f.write(f"**Source:** {post['url']}\n\n")
-                f.write(post.get("markdown") or "*Content unavailable.*")
-                f.write("\n\n---\n\n")
+def report_written(path, posts):
+    """Log a written output file."""
+    if PER_POST:
+        print(f"  Written: {path}")
+    else:
+        print(f"  Written: {path} ({len(posts)} posts)")
 
-        make_private_file(filename)
-        print(f"  Written: {filename} ({len(posts)} posts)")
+
+def markdown_post(post, heading):
+    """Return a post as Markdown, under a heading of the given level."""
+    parts = [f"{heading} {post['title']}\n\n"]
+    if post.get("subtitle"):
+        parts.append(f"*{post['subtitle']}*\n\n")
+    parts.append(f"**Date:** {post['date']}  \n")
+    parts.append(f"**Source:** {post['url']}\n\n")
+    parts.append(post.get("markdown") or "*Content unavailable.*")
+    return "".join(parts)
+
+
+def write_markdown_files(yearly_posts):
+    """Write Markdown files into MARKDOWN_OUTPUT_DIR (see output_files)."""
+    files = output_files(MARKDOWN_OUTPUT_DIR, yearly_posts, "md")
+    for path, title, posts, _year in files:
+        with open(path, "w", encoding="utf-8") as f:
+            if PER_POST:
+                f.write(markdown_post(posts[0], "#") + "\n")
+            else:
+                f.write(f"# {title}\n\n")
+                f.write(f"*{len(posts)} posts*\n\n")
+                f.write("---\n\n")
+                for post in posts:
+                    f.write(markdown_post(post, "##"))
+                    f.write("\n\n---\n\n")
+        make_private_file(path)
+        report_written(path, posts)
 
 
 # Former name, kept for existing integrations.
@@ -1254,30 +1315,29 @@ write_digest_files = write_markdown_files
 
 
 def write_html_files(yearly_posts):
-    """Write one HTML file per year into HTML_OUTPUT_DIR."""
-    make_private_directory(HTML_OUTPUT_DIR)
-    pub_name = publication_name()
-
-    for year in sorted(yearly_posts.keys()):
-        posts = yearly_posts[year]
-        filename = os.path.join(HTML_OUTPUT_DIR, f"{pub_name}_{year}.html")
-        title = html.escape(f"{pub_name} — {year}")
-        articles = "\n".join(
-            f"<article>\n{post_html(post, post.get('html'), 'h2')}\n</article>"
-            for post in posts
-        )
-        content = (
-            f"  <h1>{title}</h1>\n"
-            f"  <div class=\"meta\">{len(posts)} posts</div>\n{articles}"
-        )
-        with open(filename, "w", encoding="utf-8") as f:
+    """Write HTML files into HTML_OUTPUT_DIR (see output_files)."""
+    files = output_files(HTML_OUTPUT_DIR, yearly_posts, "html")
+    for path, title, posts, _year in files:
+        title = html.escape(title)
+        if PER_POST:
+            content = post_html(posts[0], posts[0].get("html"))
+        else:
+            articles = "\n".join(
+                f"<article>\n{post_html(post, post.get('html'), 'h2')}\n</article>"
+                for post in posts
+            )
+            content = (
+                f"  <h1>{title}</h1>\n"
+                f"  <div class=\"meta\">{len(posts)} posts</div>\n{articles}"
+            )
+        with open(path, "w", encoding="utf-8") as f:
             f.write(html_document(title, content))
-        make_private_file(filename)
-        print(f"  Written: {filename} ({len(posts)} posts)")
+        make_private_file(path)
+        report_written(path, posts)
 
 
 def write_pdf_files(yearly_posts):
-    """Write one PDF per year into PDF_OUTPUT_DIR."""
+    """Write PDF files into PDF_OUTPUT_DIR (see output_files)."""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -1290,7 +1350,6 @@ def write_pdf_files(yearly_posts):
         Spacer,
     )
 
-    make_private_directory(PDF_OUTPUT_DIR)
     pub_name = publication_name()
 
     base_styles = getSampleStyleSheet()
@@ -1407,10 +1466,8 @@ def write_pdf_files(yearly_posts):
 
         return flowables
 
-    for year in sorted(yearly_posts.keys()):
-        posts = yearly_posts[year]
-        filename = os.path.join(PDF_OUTPUT_DIR, f"{pub_name}_{year}.pdf")
-
+    files = output_files(PDF_OUTPUT_DIR, yearly_posts, "pdf")
+    for filename, title, posts, year in files:
         doc = SimpleDocTemplate(
             filename,
             pagesize=A4,
@@ -1418,22 +1475,23 @@ def write_pdf_files(yearly_posts):
             rightMargin=20 * mm,
             topMargin=20 * mm,
             bottomMargin=20 * mm,
-            title=f"{pub_name} — {year}",
+            title=title,
             author=pub_name,
         )
 
         story = []
 
-        # Cover / year header
-        story.append(Spacer(1, 30 * mm))
-        story.append(Paragraph(safe(pub_name), styles["year_title"]))
-        story.append(Paragraph(str(year), styles["year_title"]))
-        story.append(Spacer(1, 4 * mm))
-        story.append(Paragraph(f"{len(posts)} posts", styles["year_sub"]))
-        story.append(HRFlowable(width="100%", thickness=1,
-                                color=colors.HexColor("#cccccc"),
-                                spaceAfter=0))
-        story.append(PageBreak())
+        if not PER_POST:
+            # Cover / year header
+            story.append(Spacer(1, 30 * mm))
+            story.append(Paragraph(safe(pub_name), styles["year_title"]))
+            story.append(Paragraph(safe(year), styles["year_title"]))
+            story.append(Spacer(1, 4 * mm))
+            story.append(Paragraph(f"{len(posts)} posts", styles["year_sub"]))
+            story.append(HRFlowable(width="100%", thickness=1,
+                                    color=colors.HexColor("#cccccc"),
+                                    spaceAfter=0))
+            story.append(PageBreak())
 
         for post in posts:
             story.append(Paragraph(safe(post["title"]), styles["post_title"]))
@@ -1457,7 +1515,7 @@ def write_pdf_files(yearly_posts):
 
         doc.build(story)
         make_private_file(filename)
-        print(f"  Written: {filename} ({len(posts)} posts)")
+        report_written(filename, posts)
 
 
 def main(argv=None):

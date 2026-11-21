@@ -204,6 +204,9 @@ PDF_OUTPUT=false
 HTML_OUTPUT=false
 # Each post as an email, using the settings under Email output
 EMAIL_OUTPUT=false
+# true writes Markdown, PDF and HTML as one file per post, in a folder per
+# year, instead of one file per year
+PER_POST=false
 # true archives public posts only; false also archives subscriber content
 # using COOKIES_FILE (same as --subscriber-content)
 FREE_ONLY=true

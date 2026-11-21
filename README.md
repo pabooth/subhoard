@@ -196,6 +196,11 @@ work) in the [config file](#config-file) or as `SUBHOARD_*`
 own output, so `--pdf` adds PDF to whatever the config file turns on, and
 `--no-markdown` turns Markdown off for one run.
 
+Markdown, PDF and HTML normally hold a year of posts per file. With
+`--per-post` (`PER_POST=true`) they hold one post each instead, in a folder
+per year, for example `pdf_export/2024/2024-03-15-post-slug.pdf`. Email always
+sends one message per post.
+
 The Markdown and PDF files are built from a simplified Markdown copy of each
 post. The HTML files and emails use the post's original HTML, so they keep
 its formatting, links and images more faithfully.
@@ -296,6 +301,7 @@ precedence over the config file.
 | `SUBHOARD_PDF_OUTPUT`     | `true` or `false`: yearly PDF files              |
 | `SUBHOARD_HTML_OUTPUT`    | `true` or `false`: yearly HTML files             |
 | `SUBHOARD_EMAIL_OUTPUT`   | `true` or `false`: one email per post            |
+| `SUBHOARD_PER_POST`       | `true` for one file per post instead of per year |
 | `SUBHOARD_FREE_ONLY`      | `false` to include subscriber content            |
 | `SUBHOARD_COOKIES_FILE`   | Cookie export path                               |
 | `SUBHOARD_START_DATE`     | Earliest post date in `YYYY-MM-DD` format        |
