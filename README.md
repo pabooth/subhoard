@@ -262,6 +262,7 @@ precedence over the config file.
 | `SUBHOARD_CONFIG`         | Config file path (default `~/.shconfig`)         |
 | `SUBHOARD_URL`            | Publication root URL                             |
 | `SUBHOARD_OUTPUT`         | Comma-separated `digest`, `pdf`, and/or `email`  |
+| `SUBHOARD_FREE_ONLY`      | `false` to include subscriber content            |
 | `SUBHOARD_COOKIES_FILE`   | Cookie export path                               |
 | `SUBHOARD_START_DATE`     | Earliest post date in `YYYY-MM-DD` format        |
 | `SUBHOARD_FETCH_DELAY`    | Delay between archive requests                   |

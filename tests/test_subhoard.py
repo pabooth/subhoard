@@ -390,6 +390,26 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(subhoard.FETCH_DELAY, 2.0)
         self.assertEqual(subhoard.EMAIL_DELAY, 0.25)
 
+    def test_free_only_from_config_file(self):
+        self.configure_with("")
+        self.assertTrue(subhoard.FREE_ONLY)
+        for value, expected in (("false", False), ("No", False),
+                                ("0", False), ("on", True)):
+            with self.subTest(value=value):
+                self.configure_with(f"FREE_ONLY={value}\n")
+                self.assertEqual(subhoard.FREE_ONLY, expected)
+
+    def test_free_only_flags_override_config_file(self):
+        self.configure_with("FREE_ONLY=false\n", ["--free-only"])
+        self.assertTrue(subhoard.FREE_ONLY)
+        self.configure_with("FREE_ONLY=true\n", ["--subscriber-content"])
+        self.assertFalse(subhoard.FREE_ONLY)
+
+    def test_invalid_free_only_is_a_usage_error(self):
+        with patch("sys.stderr"), self.assertRaises(SystemExit) as raised:
+            self.configure_with("FREE_ONLY=maybe\n")
+        self.assertEqual(raised.exception.code, 2)
+
     def test_smtp_password_from_config_file(self):
         self.configure_with("SMTP_PASSWORD=file-secret\n")
         self.assertEqual(subhoard.SMTP_PASSWORD, "file-secret")

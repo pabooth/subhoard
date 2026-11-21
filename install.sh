@@ -196,6 +196,9 @@ template = """\
 URL=
 # Comma-separated outputs: digest, pdf and/or email
 OUTPUT=digest
+# true archives public posts only; false also archives subscriber content
+# using COOKIES_FILE (same as --subscriber-content)
+FREE_ONLY=true
 # Netscape-format cookie export, used with --subscriber-content
 COOKIES_FILE=cookies.txt
 # Earliest post date to archive, YYYY-MM-DD (empty for all posts)
@@ -203,7 +206,8 @@ START_DATE=
 # Seconds between archive requests and between emails
 FETCH_DELAY=1.0
 EMAIL_DELAY=0.5
-# Output, cache and log locations (empty LOG_FILE disables the log)
+# Output, cache and log locations (empty CACHE_DIR disables the cache,
+# empty LOG_FILE disables the log)
 CACHE_DIR=post_cache
 DIGEST_DIR=digest_export
 PDF_DIR=pdf_export

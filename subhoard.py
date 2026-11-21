@@ -67,12 +67,16 @@ LOG_FILE = None
 # variable name without its prefix; environment variables take precedence.
 DEFAULT_CONFIG_FILE = "~/.shconfig"
 CONFIG_KEYS = frozenset({
-    "URL", "OUTPUT", "COOKIES_FILE", "START_DATE", "FETCH_DELAY",
+    "URL", "OUTPUT", "FREE_ONLY", "COOKIES_FILE", "START_DATE", "FETCH_DELAY",
     "EMAIL_DELAY", "CACHE_DIR", "DIGEST_DIR", "PDF_DIR", "LOG_FILE",
     "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD",
     "SMTP_SECURITY", "FROM_ADDRESS", "TO_ADDRESS",
 })
 FILE_CONFIG = {}
+BOOLEAN_VALUES = {
+    "true": True, "yes": True, "on": True, "1": True,
+    "false": False, "no": False, "off": False, "0": False,
+}
 
 
 def env(name, default=None):
@@ -188,8 +192,8 @@ def build_parser():
     access.add_argument(
         "--free-only",
         action="store_true",
-        default=True,
-        help="Archive public posts only (default).",
+        default=None,
+        help="Archive public posts only (default; env: SUBHOARD_FREE_ONLY).",
     )
     access.add_argument(
         "--subscriber-content",
@@ -294,9 +298,18 @@ def configure_from_args(args, parser):
             + ", ".join(invalid_outputs)
         )
 
+    free_only = args.free_only
+    if free_only is None:
+        raw = env("FREE_ONLY", "true")
+        free_only = BOOLEAN_VALUES.get(raw.strip().lower())
+        if free_only is None:
+            parser.error(
+                f"SUBHOARD_FREE_ONLY must be true or false, not {raw!r}"
+            )
+
     SUBSTACK_URL = args.url
     OUTPUT_MODE = outputs
-    FREE_ONLY = args.free_only
+    FREE_ONLY = free_only
     COOKIES_FILE = args.cookies_file
     START_DATE = args.start_date
     FETCH_DELAY = args.fetch_delay
