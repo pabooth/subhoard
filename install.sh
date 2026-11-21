@@ -10,10 +10,14 @@
 # into SUBHOARD_HOME (using a pinned, checksum-verified uv), so nothing needs
 # to be installed system-wide.
 #
+# An empty, private config file is created at SUBHOARD_CONFIG (default
+# ~/.shconfig) if none exists. An existing one is never changed.
+#
 # Environment overrides:
 #   PYTHON            Python interpreter to use (must be 3.11 or newer)
 #   SUBHOARD_HOME     install location   (default ~/.local/share/subhoard)
 #   SUBHOARD_BIN_DIR  command directory  (default ~/.local/bin)
+#   SUBHOARD_CONFIG   config file        (default ~/.shconfig)
 
 set -euo pipefail
 
@@ -27,6 +31,8 @@ abspath() {
 
 SUBHOARD_HOME="$(abspath "${SUBHOARD_HOME:-$HOME/.local/share/subhoard}")"
 SUBHOARD_BIN_DIR="$(abspath "${SUBHOARD_BIN_DIR:-$HOME/.local/bin}")"
+SUBHOARD_CONFIG="${SUBHOARD_CONFIG:-$HOME/.shconfig}"
+SUBHOARD_CONFIG="$(abspath "${SUBHOARD_CONFIG/#\~/$HOME}")"
 if [[ -n "${PYTHON:-}" && "$PYTHON" == */* ]]; then
     PYTHON="$(abspath "$PYTHON")"
 fi
@@ -50,7 +56,7 @@ warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-    sed -n '2,17s/^# \{0,1\}//p' "$0"
+    sed -n '2,21s/^# \{0,1\}//p' "$0"
 }
 
 python_ok() {
@@ -166,6 +172,26 @@ a dedicated directory, or install Python 3.11 or newer."
     PYTHON_BIN="$(private_uv python find --managed-python --no-project "$MANAGED_PYTHON")"
 }
 
+# Create an empty config file for the user to fill in. It may later hold
+# SMTP_PASSWORD, so it is readable only by its owner. An existing file (or a
+# symlink, even a dangling one) is left untouched.
+create_config() {
+    if [[ -e "$SUBHOARD_CONFIG" || -L "$SUBHOARD_CONFIG" ]]; then
+        echo "Keeping existing config file $SUBHOARD_CONFIG"
+        return
+    fi
+    step "Creating config file $SUBHOARD_CONFIG"
+    mkdir -p "$(dirname "$SUBHOARD_CONFIG")"
+    (
+        umask 077
+        cat > "$SUBHOARD_CONFIG" <<'CONFIG'
+# Subhoard settings, one KEY=VALUE per line. Run `subhoard --help` or see
+# the README for the available keys. Command-line arguments and SUBHOARD_*
+# environment variables take precedence over this file.
+CONFIG
+    )
+}
+
 uninstall() {
     # Only delete what this script created, so a mistaken SUBHOARD_HOME
     # cannot remove an unrelated directory.
@@ -241,6 +267,8 @@ install() {
     step "Linking $LINK"
     mkdir -p "$SUBHOARD_BIN_DIR"
     ln -sf "$VENV/bin/subhoard" "$LINK"
+
+    create_config
 
     step "Done"
     "$LINK" --version
