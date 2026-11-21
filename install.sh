@@ -41,6 +41,9 @@ UV_VERSION="0.13.7"
 MANAGED_PYTHON="3.13"
 UV_DIR="$SUBHOARD_HOME/uv"
 PYTHON_DIR="$SUBHOARD_HOME/python"
+# Created alongside UV_DIR and PYTHON_DIR, so uninstall only removes those
+# directories when this script made them.
+PRIVATE_PYTHON_MARKER="$SUBHOARD_HOME/.subhoard-private-python"
 
 step() { printf '\n==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -87,11 +90,17 @@ sha256_of() {
     fi
 }
 
-# Run the private uv, ignoring any uv configuration the user has and keeping
-# its cache and Python downloads inside SUBHOARD_HOME.
+# Run the private uv with all of the user's UV_* settings cleared (an exported
+# UV_CONFIG_FILE, UV_OFFLINE or UV_PYTHON_DOWNLOADS would otherwise still
+# apply), keeping its cache and Python downloads inside SUBHOARD_HOME.
 private_uv() {
-    UV_NO_CONFIG=1 UV_CACHE_DIR="$UV_DIR/cache" UV_PYTHON_INSTALL_DIR="$PYTHON_DIR" \
-        "$UV_DIR/uv" "$@"
+    (
+        for var in $(compgen -e); do
+            [[ "$var" == UV_* ]] && unset "$var"
+        done
+        export UV_NO_CONFIG=1 UV_CACHE_DIR="$UV_DIR/cache" UV_PYTHON_INSTALL_DIR="$PYTHON_DIR"
+        exec "$UV_DIR/uv" "$@"
+    )
 }
 
 fetch_uv() {
@@ -139,6 +148,17 @@ find_python() {
 automatically on $(uname -sm). Install it, then re-run this script, or set
 PYTHON=/path/to/python3."
 
+    if [[ ! -f "$PRIVATE_PYTHON_MARKER" ]]; then
+        local dir
+        for dir in "$UV_DIR" "$PYTHON_DIR"; do
+            [[ ! -e "$dir" ]] || die "$dir already exists and was not created by this
+installer, so it will not be used for a private Python. Set SUBHOARD_HOME to
+a dedicated directory, or install Python 3.11 or newer."
+        done
+        mkdir -p "$SUBHOARD_HOME"
+        touch "$PRIVATE_PYTHON_MARKER"
+    fi
+
     echo "No Python 3.11 or newer found; installing a private copy in $PYTHON_DIR."
     fetch_uv "$target"
     step "Installing Python $MANAGED_PYTHON"
@@ -163,7 +183,11 @@ uninstall() {
     fi
 
     step "Removing Subhoard's files from $SUBHOARD_HOME"
-    rm -rf "$VENV" "$BACKUP" "$PYTHON_DIR" "$UV_DIR"
+    rm -rf "$VENV" "$BACKUP"
+    if [[ -f "$PRIVATE_PYTHON_MARKER" ]]; then
+        rm -rf "$PYTHON_DIR" "$UV_DIR"
+        rm -f "$PRIVATE_PYTHON_MARKER"
+    fi
     rmdir "$SUBHOARD_HOME" 2>/dev/null || true
     echo "Subhoard has been uninstalled."
 }
