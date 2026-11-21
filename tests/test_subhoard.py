@@ -292,6 +292,151 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(subhoard.SUBSTACK_URL, "https://example.substack.com")
         self.assertEqual(subhoard.OUTPUT_MODE, ["digest", "pdf"])
 
+    def write_config(self, text):
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".shconfig", delete=False, encoding="utf-8"
+        ) as config:
+            config.write(text)
+        self.addCleanup(os.unlink, config.name)
+        return config.name
+
+    def test_config_file_supplies_defaults_below_env_and_cli(self):
+        path = self.write_config(
+            "# comment\n"
+            "SUBHOARD_URL=https://file.substack.com\n"
+            "export output = 'pdf'\n"
+            'cache_dir="file_cache"\n'
+            "FETCH_DELAY=2.5\n"
+        )
+        self.addCleanup(setattr, subhoard, "FILE_CONFIG", {})
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("SUBHOARD_")}
+        env["SUBHOARD_CACHE_DIR"] = "env_cache"
+        with patch.dict(os.environ, env, clear=True):
+            argv = ["--config", path, "--fetch-delay", "3"]
+            self.assertEqual(subhoard.load_config(argv), path)
+            parser = subhoard.build_parser()
+            args = parser.parse_args(argv)
+            subhoard.configure_from_args(args, parser)
+
+        self.assertEqual(subhoard.SUBSTACK_URL, "https://file.substack.com")
+        self.assertEqual(subhoard.OUTPUT_MODE, ["pdf"])
+        self.assertEqual(subhoard.CACHE_DIR, "env_cache")
+        self.assertEqual(subhoard.FETCH_DELAY, 3.0)
+
+    def test_config_file_path_from_environment(self):
+        path = self.write_config("URL=https://env-config.substack.com\n")
+        self.addCleanup(setattr, subhoard, "FILE_CONFIG", {})
+        with patch.dict(os.environ, {"SUBHOARD_CONFIG": path}):
+            self.assertEqual(subhoard.load_config([]), path)
+        self.assertEqual(
+            subhoard.FILE_CONFIG, {"URL": "https://env-config.substack.com"}
+        )
+
+    def test_missing_default_config_is_ignored(self):
+        self.addCleanup(setattr, subhoard, "FILE_CONFIG", {})
+        with tempfile.TemporaryDirectory() as home, patch.dict(
+            os.environ, {"HOME": home}
+        ):
+            os.environ.pop("SUBHOARD_CONFIG", None)
+            self.assertIsNone(subhoard.load_config([]))
+        self.assertEqual(subhoard.FILE_CONFIG, {})
+
+    def test_default_config_is_read_from_home(self):
+        self.addCleanup(setattr, subhoard, "FILE_CONFIG", {})
+        with tempfile.TemporaryDirectory() as home, patch.dict(
+            os.environ, {"HOME": home}
+        ):
+            os.environ.pop("SUBHOARD_CONFIG", None)
+            path = os.path.join(home, ".shconfig")
+            with open(path, "w", encoding="utf-8") as config:
+                config.write("URL=https://home.substack.com\n")
+            self.assertEqual(subhoard.load_config([]), path)
+        self.assertEqual(subhoard.FILE_CONFIG["URL"], "https://home.substack.com")
+
+    def configure_with(self, config_text, argv=(), environ=None):
+        """Load a config file and apply it as main() would."""
+        path = self.write_config(config_text)
+        self.addCleanup(setattr, subhoard, "FILE_CONFIG", {})
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("SUBHOARD_")}
+        env.update(environ or {})
+        argv = ["--config", path, *argv]
+        with patch.dict(os.environ, env, clear=True):
+            subhoard.load_config(argv)
+            parser = subhoard.build_parser()
+            args = parser.parse_args(argv)
+            subhoard.configure_from_args(args, parser)
+        return path
+
+    def test_smtp_port_flag_overrides_invalid_config_value(self):
+        self.configure_with("SMTP_PORT=invalid\n", ["--smtp-port", "465"])
+        self.assertEqual(subhoard.SMTP_PORT, 465)
+
+    def test_invalid_config_numbers_are_usage_errors(self):
+        for key in ("SMTP_PORT", "FETCH_DELAY", "EMAIL_DELAY"):
+            with self.subTest(key=key), patch("sys.stderr") as stderr:
+                with self.assertRaises(SystemExit) as raised:
+                    self.configure_with(f"{key}=invalid\n")
+                self.assertEqual(raised.exception.code, 2)
+                output = "".join(c.args[0] for c in stderr.write.call_args_list)
+                self.assertIn("invalid", output)
+
+    def test_config_numbers_are_converted(self):
+        self.configure_with(
+            "SMTP_PORT=2525\nFETCH_DELAY=2\nEMAIL_DELAY=0.25\n"
+        )
+        self.assertEqual(subhoard.SMTP_PORT, 2525)
+        self.assertEqual(subhoard.FETCH_DELAY, 2.0)
+        self.assertEqual(subhoard.EMAIL_DELAY, 0.25)
+
+    def test_smtp_password_from_config_file(self):
+        self.configure_with("SMTP_PASSWORD=file-secret\n")
+        self.assertEqual(subhoard.SMTP_PASSWORD, "file-secret")
+
+    def test_smtp_password_environment_overrides_config_file(self):
+        self.configure_with(
+            "SMTP_PASSWORD=file-secret\n",
+            environ={"SUBHOARD_SMTP_PASSWORD": "env-secret"},
+        )
+        self.assertEqual(subhoard.SMTP_PASSWORD, "env-secret")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permissions only")
+    def test_config_with_password_warns_only_when_exposed(self):
+        path = self.write_config("SMTP_PASSWORD=file-secret\n")
+        self.addCleanup(setattr, subhoard, "FILE_CONFIG", {})
+        for mode, expect_warning in ((0o600, False), (0o644, True)):
+            with self.subTest(mode=oct(mode)):
+                os.chmod(path, mode)
+                with patch("builtins.print") as printed:
+                    subhoard.load_config(["--config", path])
+                output = " ".join(
+                    str(arg) for c in printed.call_args_list for arg in c.args
+                )
+                if expect_warning:
+                    self.assertIn("WARNING", output)
+                    self.assertIn("644", output)
+                else:
+                    printed.assert_not_called()
+
+    def test_malformed_key_is_not_echoed(self):
+        path = self.write_config("SMTP_PASSWORD secret-token==\n")
+        with self.assertRaises(ValueError) as raised:
+            subhoard.parse_config_file(path)
+        message = str(raised.exception).lower()
+        self.assertIn("expected key=value", message)
+        self.assertNotIn("secret", message)
+
+    def test_missing_explicit_config_is_an_error(self):
+        with self.assertRaises(SystemExit), patch("sys.stderr"):
+            subhoard.load_config(["--config", "/nonexistent/subhoard.conf"])
+
+    def test_config_file_rejects_unknown_and_malformed_lines(self):
+        for text in ("URLL=https://x\n", "just words\n"):
+            path = self.write_config(text)
+            with self.assertRaises(ValueError):
+                subhoard.parse_config_file(path)
+
     def test_post_navigation_is_limited_to_publication_host(self):
         with patch.object(
             subhoard,

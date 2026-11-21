@@ -202,8 +202,9 @@ Revoke the browser session if an export may have been exposed.
 
 ## Email output
 
-SMTP passwords are intentionally accepted only through the
-`SUBHOARD_SMTP_PASSWORD` environment variable or a hidden interactive prompt.
+SMTP passwords are accepted only through the `SUBHOARD_SMTP_PASSWORD`
+environment variable, the [config file](#config-file), or a hidden
+interactive prompt. They are never accepted as a command-line argument.
 
 ```console
 export SUBHOARD_SMTP_PASSWORD='your-app-password'
@@ -221,13 +222,39 @@ subhoard \
 The default SMTP security mode is STARTTLS. Use `--smtp-security ssl` for
 implicit TLS, commonly on port 465.
 
+## Config file
+
+Settings can be kept in a config file, read from `~/.shconfig` by default.
+Use `--config PATH` or `SUBHOARD_CONFIG` to read a different file. A missing
+default file is ignored, but a file named with `--config` or
+`SUBHOARD_CONFIG` must exist.
+
+The file holds one `KEY=VALUE` setting per line, using the
+[environment variable](#environment-variables) names with or without the
+`SUBHOARD_` prefix:
+
+```sh
+# ~/.shconfig
+URL=https://example.substack.com
+OUTPUT=digest,pdf
+COOKIES_FILE=cookies.txt
+```
+
+Blank lines, `#` comments and a leading `export` are ignored, and surrounding
+quotes are removed, so a file of `export SUBHOARD_...=` lines also works.
+Unknown keys are rejected to catch typos.
+
+If the file contains `SMTP_PASSWORD`, keep it private with `chmod 600
+~/.shconfig`; Subhoard warns when other users can read it.
+
 ## Environment variables
 
-Command-line arguments take precedence over their corresponding environment
-variables.
+Command-line arguments take precedence over environment variables, which take
+precedence over the config file.
 
 | Variable                  | Purpose                                          |
 |---------------------------|--------------------------------------------------|
+| `SUBHOARD_CONFIG`         | Config file path (default `~/.shconfig`)         |
 | `SUBHOARD_URL`            | Publication root URL                             |
 | `SUBHOARD_OUTPUT`         | Comma-separated `digest`, `pdf`, and/or `email`  |
 | `SUBHOARD_COOKIES_FILE`   | Cookie export path                               |
