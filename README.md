@@ -54,13 +54,15 @@ code would run on older versions, but on Python 3.9, such as the built-in
 installs, and Subhoard relies on a current Camoufox to read Substack's
 archive. Python 3.9 and 3.10 also no longer receive security fixes.
 
-You do not need to install Python yourself: if no suitable version is found,
-the script downloads a private copy of Python into `~/.local/share/subhoard`. It
+You do not need to install Python yourself: if `PYTHON` is not set and no
+suitable version is found, the script downloads a private copy of Python into `~/.local/share/subhoard`. It
 uses [uv](https://docs.astral.sh/uv/) to do this, pinned to a fixed release
 and checked against its SHA-256 checksum. Nothing is installed system-wide.
 Automatic download is available on macOS and on Linux with glibc, on x86-64
 and ARM64. To use a specific interpreter instead, run
-`PYTHON=python3.13 ./install.sh`.
+`PYTHON=python3.13 ./install.sh`. It must be Python 3.11 or newer: if it is
+older, the script stops with an error rather than downloading Python, so
+unset `PYTHON` to use the private copy.
 
 What the script does:
 
