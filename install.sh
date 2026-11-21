@@ -13,9 +13,18 @@
 
 set -euo pipefail
 
-SUBHOARD_HOME="${SUBHOARD_HOME:-$HOME/.local/share/subhoard}"
-SUBHOARD_BIN_DIR="${SUBHOARD_BIN_DIR:-$HOME/.local/bin}"
+# Resolve overrides against the caller's directory before install() changes it.
+abspath() {
+    case "$1" in
+        /*) printf '%s\n' "$1" ;;
+        *) printf '%s\n' "$PWD/$1" ;;
+    esac
+}
+
+SUBHOARD_HOME="$(abspath "${SUBHOARD_HOME:-$HOME/.local/share/subhoard}")"
+SUBHOARD_BIN_DIR="$(abspath "${SUBHOARD_BIN_DIR:-$HOME/.local/bin}")"
 VENV="$SUBHOARD_HOME/venv"
+BACKUP="$VENV.previous"
 LINK="$SUBHOARD_BIN_DIR/subhoard"
 
 step() { printf '\n==> %s\n' "$*"; }
@@ -32,8 +41,10 @@ python_ok() {
 
 find_python() {
     if [[ -n "${PYTHON:-}" ]]; then
-        python_ok "$PYTHON" || die "PYTHON=$PYTHON is not Python 3.11 or newer."
-        printf '%s\n' "$PYTHON"
+        local python="$PYTHON"
+        [[ "$python" == */* ]] && python="$(abspath "$python")"
+        python_ok "$python" || die "PYTHON=$PYTHON is not Python 3.11 or newer."
+        printf '%s\n' "$python"
         return
     fi
     local candidate
@@ -48,17 +59,43 @@ https://www.python.org/downloads/ or Homebrew, or set PYTHON=/path/to/python3."
 }
 
 uninstall() {
-    if [[ -x "$VENV/bin/python" ]]; then
-        step "Removing the Camoufox browser"
-        "$VENV/bin/python" -m camoufox remove || warn "camoufox remove failed; continuing."
+    # Only delete what this script created, so a mistaken SUBHOARD_HOME
+    # cannot remove an unrelated directory.
+    [[ -x "$VENV/bin/subhoard" ]] \
+        || die "No Subhoard installation found at $VENV; nothing was removed."
+
+    step "Removing the Camoufox browser"
+    "$VENV/bin/python" -m camoufox remove || warn "camoufox remove failed; continuing."
+
+    if [[ -L "$LINK" && "$(readlink "$LINK")" == "$VENV/bin/subhoard" ]]; then
+        step "Removing $LINK"
+        rm -f "$LINK"
+    elif [[ -e "$LINK" || -L "$LINK" ]]; then
+        warn "$LINK does not point to this installation; left in place."
     fi
-    step "Removing $LINK and $SUBHOARD_HOME"
-    rm -f "$LINK"
-    rm -rf "$SUBHOARD_HOME"
+
+    step "Removing $VENV"
+    rm -rf "$VENV" "$BACKUP"
+    rmdir "$SUBHOARD_HOME" 2>/dev/null || true
     echo "Subhoard has been uninstalled."
 }
 
+# If an update fails part-way, put the previous environment back so the
+# existing subhoard command keeps working. venvs embed absolute paths, so the
+# old one is moved aside and restored to the same path rather than the new one
+# being built elsewhere and moved into place.
+restore_previous() {
+    if [[ -d "$BACKUP" ]]; then
+        rm -rf "$VENV"
+        mv "$BACKUP" "$VENV"
+        warn "installation failed; the previous installation has been restored."
+    fi
+}
+
 install() {
+    local python
+    python="$(find_python)"
+
     cd "$(dirname "$0")"
     [[ -f requirements.lock && -f pyproject.toml ]] \
         || die "Run this script from inside a Subhoard checkout."
@@ -69,12 +106,15 @@ install() {
   git checkout \"\$(git describe --tags --abbrev=0)\""
     fi
 
-    local python
-    python="$(find_python)"
     echo "Using $python ($("$python" --version 2>&1))"
 
     step "Creating virtual environment in $VENV"
-    "$python" -m venv --clear "$VENV"
+    rm -rf "$BACKUP"
+    if [[ -e "$VENV" ]]; then
+        mv "$VENV" "$BACKUP"
+        trap restore_previous EXIT
+    fi
+    "$python" -m venv "$VENV"
 
     step "Installing locked dependencies"
     "$VENV/bin/python" -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements.lock
@@ -84,6 +124,9 @@ install() {
 
     step "Fetching the Camoufox browser (first run downloads several hundred MB)"
     "$VENV/bin/python" -m camoufox fetch
+
+    trap - EXIT
+    rm -rf "$BACKUP"
 
     step "Linking $LINK"
     mkdir -p "$SUBHOARD_BIN_DIR"

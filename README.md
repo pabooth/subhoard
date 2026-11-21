@@ -58,8 +58,9 @@ succeeded. To use a specific interpreter, run
 
 What the script does:
 
-- Creates the virtual environment with `venv --clear`, or empties an existing
-  one, so the same command also performs a clean update.
+- Creates a fresh virtual environment, so the same command also performs a
+  clean update. During an update the previous environment is kept until the
+  new one is complete, and is restored if any step fails.
 - Installs dependencies from `requirements.lock`, which pins every runtime
   dependency to an exact version and SHA-256 hash, so pip refuses any package
   that differs from the one that was tested. Subhoard itself is then installed
@@ -77,7 +78,7 @@ What the script does:
   activated to run it, and prints `subhoard --version` to confirm the install.
 
 To pin a specific release, check out its tag instead, for example
-`git checkout v2.2.0`. The temporary directory can be deleted once
+`git checkout v2.2.1`. The temporary directory can be deleted once
 installation finishes.
 
 If `subhoard --version` reports `command not found`, `~/.local/bin` is not on
@@ -105,8 +106,9 @@ From a Subhoard checkout:
 ./install.sh --uninstall
 ```
 
-This removes the downloaded Camoufox browser, `~/.local/share/subhoard`, and
-the `~/.local/bin/subhoard` link.
+This removes the downloaded Camoufox browser, the virtual environment under
+`~/.local/share/subhoard`, and the `~/.local/bin/subhoard` link. It stops
+without deleting anything if no Subhoard installation is found there.
 
 ### Development
 
