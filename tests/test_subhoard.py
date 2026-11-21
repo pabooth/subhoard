@@ -437,6 +437,18 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 subhoard.parse_config_file(path)
 
+    def test_installer_config_template_lists_every_setting(self):
+        install_sh = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "install.sh",
+        )
+        with open(install_sh, encoding="utf-8") as script:
+            source = script.read()
+        start = source.index('template = """\\\n') + len('template = """\\\n')
+        template = source[start:source.index('"""', start)]
+        settings = subhoard.parse_config_file(self.write_config(template))
+        self.assertEqual(set(settings), subhoard.CONFIG_KEYS)
+
     def test_post_navigation_is_limited_to_publication_host(self):
         with patch.object(
             subhoard,

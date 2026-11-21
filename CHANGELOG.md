@@ -7,6 +7,12 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed
+
+- The config file created by `install.sh` now lists every setting at its
+  default value, with a short comment on each, instead of only a header.
+
 ## [2.4.1] - 2026-11-21
 
 Added stub config file as install
