@@ -301,6 +301,25 @@ class ContentSecurityTests(unittest.TestCase):
         subhoard.BeautifulSoup is None,
         "beautifulsoup4 is not installed",
     )
+    def test_control_characters_do_not_hide_url_schemes(self):
+        content = subhoard.BeautifulSoup(
+            '<a href="\x01javascript:alert(1)">a</a>'
+            '<a href="  java\tscript:alert(2)">b</a>'
+            '<a href="\x7fjavascript:alert(3)">c</a>'
+            '<a href="https://example.com/">d</a>',
+            "html.parser",
+        )
+        subhoard.sanitise_content(content)
+        links = content.find_all("a")
+        self.assertEqual(
+            [link.get("href") for link in links],
+            [None, None, None, "https://example.com/"],
+        )
+
+    @unittest.skipIf(
+        subhoard.BeautifulSoup is None,
+        "beautifulsoup4 is not installed",
+    )
     def test_active_document_elements_are_removed_on_export(self):
         cached_html = (
             '<meta http-equiv="refresh" content="0; URL=https://attacker.example/">'

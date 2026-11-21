@@ -1052,8 +1052,12 @@ def sanitise_content(content):
             value = element.get(attribute)
             if isinstance(value, list):
                 value = " ".join(value)
-            if value and urlparse(value.strip()).scheme.lower() in {
+            # Browsers ignore control characters and spaces in a URL's
+            # scheme, and some Python 3.11 releases do not strip them.
+            checked = re.sub(r"[\x00-\x20\x7f]", "", value or "")
+            if checked and urlparse(checked).scheme.lower() in {
                 "javascript",
+                "vbscript",
                 "data",
                 "file",
             }:
