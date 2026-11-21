@@ -86,9 +86,10 @@ What the script does:
   build is downloaded.
 - Links `subhoard` into `~/.local/bin`, so no virtual environment needs to be
   activated to run it, and prints `subhoard --version` to confirm the install.
-- Creates an empty [config file](#config-file) at `~/.shconfig` (or
-  `SUBHOARD_CONFIG`), readable only by you, if one does not already exist. An
-  existing config file is never changed.
+- Creates a [config file](#config-file) at `~/.shconfig` (or
+  `SUBHOARD_CONFIG`), readable only by you, if one does not already exist. It
+  lists every setting at its default value, ready to fill in. An existing
+  config file is never changed.
 
 To pin a specific release, check out its tag instead, for example
 `git checkout v2.2.1`. The temporary directory can be deleted once

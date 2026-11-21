@@ -10,8 +10,9 @@
 # into SUBHOARD_HOME (using a pinned, checksum-verified uv), so nothing needs
 # to be installed system-wide.
 #
-# An empty, private config file is created at SUBHOARD_CONFIG (default
-# ~/.shconfig) if none exists. An existing one is never changed.
+# A private config file listing every setting at its default is created at
+# SUBHOARD_CONFIG (default ~/.shconfig) if none exists. An existing one is
+# never changed.
 #
 # Environment overrides:
 #   PYTHON            Python interpreter to use (must be 3.11 or newer)
@@ -57,7 +58,7 @@ warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-    sed -n '2,21s/^# \{0,1\}//p' "$0"
+    sed -n '2,22s/^# \{0,1\}//p' "$0"
 }
 
 python_ok() {
@@ -173,8 +174,9 @@ a dedicated directory, or install Python 3.11 or newer."
     PYTHON_BIN="$(private_uv python find --managed-python --no-project "$MANAGED_PYTHON")"
 }
 
-# Create an empty config file for the user to fill in. It may later hold
-# SMTP_PASSWORD, so it is readable only by its owner. The installed Python
+# Create a config file listing every setting at its default, for the user
+# to fill in. It may later hold SMTP_PASSWORD, so it is readable only by its
+# owner. The installed Python
 # expands ~ and ~user exactly as Subhoard's loader does, resolves relative
 # paths against the caller's directory, and creates the file with O_EXCL so
 # an existing entry, including a symlink, is never followed or changed.
@@ -185,11 +187,38 @@ import sys
 
 caller_dir, raw = sys.argv[1:]
 path = os.path.join(caller_dir, os.path.expanduser(raw))
-header = (
-    "# Subhoard settings, one KEY=VALUE per line. Run `subhoard --help` or see\n"
-    "# the README for the available keys. Command-line arguments and SUBHOARD_*\n"
-    "# environment variables take precedence over this file.\n"
-)
+template = """\
+# Subhoard settings, one KEY=VALUE per line. Command-line arguments and
+# SUBHOARD_* environment variables take precedence over this file. Values
+# below are the defaults; run `subhoard --help` or see the README for details.
+
+# Publication root URL, for example https://example.substack.com
+URL=
+# Comma-separated outputs: digest, pdf and/or email
+OUTPUT=digest
+# Netscape-format cookie export, used with --subscriber-content
+COOKIES_FILE=cookies.txt
+# Earliest post date to archive, YYYY-MM-DD (empty for all posts)
+START_DATE=
+# Seconds between archive requests and between emails
+FETCH_DELAY=1.0
+EMAIL_DELAY=0.5
+# Output, cache and log locations (empty LOG_FILE disables the log)
+CACHE_DIR=post_cache
+DIGEST_DIR=digest_export
+PDF_DIR=pdf_export
+LOG_FILE=
+
+# Email output
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+# starttls or ssl
+SMTP_SECURITY=starttls
+FROM_ADDRESS=
+TO_ADDRESS=
+"""
 try:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -202,7 +231,7 @@ except OSError as exc:
     sys.exit(0)
 try:
     with os.fdopen(fd, "w", encoding="utf-8") as config_file:
-        config_file.write(header)
+        config_file.write(template)
 except OSError as exc:
     # This process created the file, so removing it touches nothing else.
     try:
