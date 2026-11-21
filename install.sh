@@ -200,8 +200,18 @@ except OSError as exc:
     print(f"warning: could not create config file {path}: {exc.strerror}",
           file=sys.stderr)
     sys.exit(0)
-with os.fdopen(fd, "w", encoding="utf-8") as config_file:
-    config_file.write(header)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as config_file:
+        config_file.write(header)
+except OSError as exc:
+    # This process created the file, so removing it touches nothing else.
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    print(f"warning: could not write config file {path}: {exc.strerror}",
+          file=sys.stderr)
+    sys.exit(0)
 print(f"\n==> Created config file {path}")
 PY
 }
