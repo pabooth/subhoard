@@ -472,5 +472,44 @@ class PublicationNameTests(unittest.TestCase):
             self.assertEqual(os.listdir(temp_dir), ["Example_2026.md"])
 
 
+def reportlab_available():
+    try:
+        import reportlab  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@unittest.skipUnless(reportlab_available(), "reportlab is not installed")
+class PdfExportTests(unittest.TestCase):
+    def test_writes_one_pdf_per_year_with_escaped_content(self):
+        markdown = (
+            "# Heading\n\n## Sub\n\nBody with <tags> & ampersands.\n\n"
+            "> A quote\n\n- item one\n- item two\n\nCafé “quotes”."
+        )
+        post = {
+            "title": "First & <Best>",
+            "subtitle": "A subtitle",
+            "url": "https://example.substack.com/p/first",
+            "date": "2026-01-02",
+            "markdown": markdown,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(subhoard, "PDF_OUTPUT_DIR", temp_dir))
+                stack.enter_context(
+                    patch.object(subhoard, "SUBSTACK_URL", "https://example.substack.com")
+                )
+                stack.enter_context(patch("builtins.print"))
+                older = dict(post, date="2025-06-01")
+                subhoard.write_pdf_files({"2026": [post], "2025": [older]})
+
+            self.assertEqual(
+                sorted(os.listdir(temp_dir)), ["Example_2025.pdf", "Example_2026.pdf"]
+            )
+            with open(os.path.join(temp_dir, "Example_2026.pdf"), "rb") as f:
+                self.assertEqual(f.read(5), b"%PDF-")
+
+
 if __name__ == "__main__":
     unittest.main()

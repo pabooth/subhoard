@@ -8,6 +8,10 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- Allow reportlab 5; the lock file now installs reportlab 5.1.0.
+
 ## [2.2.0] - 2026-11-19
 
 Fixed install steps and problem with Substack API
