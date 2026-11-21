@@ -7,6 +7,14 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Added
+
+- `install.sh` downloads a private copy of Python when no Python 3.11 or
+  newer is installed, so a stock Mac no longer needs Homebrew or a separate
+  Python install. The download uses a pinned, checksum-verified uv release
+  and stays inside `~/.local/share/subhoard`.
+
 ## [2.2.1] - 2026-11-21
 
 Added an install script.

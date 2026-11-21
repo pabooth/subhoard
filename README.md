@@ -24,7 +24,7 @@ redistribute subscriber content without the publisher's permission.
 
 ## Requirements
 
-- Python 3.11 or newer
+- Python 3.11 or newer (downloaded automatically if missing; see below)
 - About 3 GB of free disk space (mostly the Camoufox browser download)
 - A valid subscription for any subscriber content being archived
 
@@ -32,12 +32,6 @@ redistribute subscriber content without the publisher's permission.
 
 Install from the latest tagged release rather than the tip of `main`. Releases
 are the versions that have passed the full release checks.
-
-First check that `python3 --version` reports 3.11 or newer. On macOS, the
-built-in `/usr/bin/python3` is 3.9, which fails at the dependency step with
-"No matching distribution found". Install a current Python from
-[python.org](https://www.python.org/downloads/) or Homebrew, and if needed
-use it explicitly in the `venv` step, for example `python3.13 -m venv ...`.
 
 Subhoard is installed into its own virtual environment under
 `~/.local/share/subhoard`, and the `subhoard` command is linked into
@@ -51,9 +45,17 @@ git checkout --quiet "$(git describe --tags --abbrev=0)"
 ./install.sh
 ```
 
-`install.sh` finds a Python 3.11 or newer interpreter and stops at the first
-step that fails, so Subhoard is linked into `~/.local/bin` only if every step
-succeeded. To use a specific interpreter, run
+`install.sh` stops at the first step that fails, so Subhoard is linked into
+`~/.local/bin` only if every step succeeded.
+
+Subhoard needs Python 3.11 or newer, because the Camoufox browser library and
+its dependencies do. You do not need to install it yourself: if no suitable
+Python is found, as on a stock Mac, whose built-in `python3` is 3.9, the
+script downloads a private copy of Python into `~/.local/share/subhoard`. It
+uses [uv](https://docs.astral.sh/uv/) to do this, pinned to a fixed release
+and checked against its SHA-256 checksum. Nothing is installed system-wide.
+Automatic download is available on macOS and on Linux with glibc, on x86-64
+and ARM64. To use a specific interpreter instead, run
 `PYTHON=python3.13 ./install.sh`.
 
 What the script does:
@@ -106,9 +108,10 @@ From a Subhoard checkout:
 ./install.sh --uninstall
 ```
 
-This removes the downloaded Camoufox browser, the virtual environment under
-`~/.local/share/subhoard`, and the `~/.local/bin/subhoard` link. It stops
-without deleting anything if no Subhoard installation is found there.
+This removes the downloaded Camoufox browser, the virtual environment and any
+Python the installer downloaded under `~/.local/share/subhoard`, and the
+`~/.local/bin/subhoard` link. It stops without deleting anything if no
+Subhoard installation is found there.
 
 ### Development
 
