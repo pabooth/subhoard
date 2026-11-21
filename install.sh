@@ -196,18 +196,19 @@ template = """\
 URL=
 # Outputs, each true or false. With all of them false, Subhoard only
 # fetches posts into CACHE_DIR, ready to build outputs from later.
-# Each post as an email, using the settings under Email output
-EMAIL_OUTPUT=true
+# Email each post (the main use): set true once the settings under
+# Email output below are filled in
+EMAIL_OUTPUT=false
 # Markdown files in MARKDOWN_DIR
-MARKDOWN_OUTPUT=false
+MARKDOWN_OUTPUT=true
 # PDF files in PDF_DIR
 PDF_OUTPUT=false
 # HTML files in HTML_DIR, keeping the original formatting
 HTML_OUTPUT=false
-# For Markdown, PDF and HTML, true gives per post output, rather than
-# digest mode
+# For Markdown, PDF and HTML, true gives one file per post rather than
+# one file per year
 PER_POST=false
-# true archives public posts only which is much quicker; false also archives
+# true archives public posts only, which is much quicker; false also archives
 # subscriber content using COOKIES_FILE (same as --subscriber-content)
 FREE_ONLY=true
 # Netscape-format cookie export, used with --subscriber-content
@@ -219,10 +220,10 @@ FETCH_DELAY=1.0
 EMAIL_DELAY=0.5
 # Output, cache and log locations (empty CACHE_DIR disables the cache,
 # empty LOG_FILE disables the log)
-CACHE_DIR=/tmp/subhoard_cache
-MARKDOWN_DIR=/tmp/subhoard_markdown
-PDF_DIR=/tmp/subhoard_pdf
-HTML_DIR=/tmp/subhoard_html
+CACHE_DIR=post_cache
+MARKDOWN_DIR=digest_export
+PDF_DIR=pdf_export
+HTML_DIR=html_export
 LOG_FILE=
 
 # Email output
