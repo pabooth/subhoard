@@ -776,14 +776,29 @@ def load_all_cached_posts(posts=None):
         try:
             with open(path, encoding="utf-8") as f:
                 post = json.load(f)
-            identity = post.get("url") or post.get("slug") or path
-            if identity in seen_posts:
-                continue
-            seen_posts.add(identity)
-            loaded.append(post)
-        except (OSError, json.JSONDecodeError, AttributeError):
-            pass
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not is_usable_cached_post(post):
+            print(f"  Warning: skipping unusable cache file {fname}")
+            continue
+        identity = post.get("url") or post.get("slug") or path
+        if identity in seen_posts:
+            continue
+        seen_posts.add(identity)
+        loaded.append(post)
     return group_by_year(loaded)
+
+
+def is_usable_cached_post(post):
+    """Whether a cache record has the fields, of the types, outputs rely on."""
+    if not isinstance(post, dict):
+        return False
+    if not all(isinstance(post.get(key), str) for key in ("title", "url", "date")):
+        return False
+    return all(
+        post.get(key) is None or isinstance(post.get(key), str)
+        for key in ("subtitle", "slug", "markdown", "html")
+    )
 
 
 def group_by_year(posts):
@@ -999,11 +1014,29 @@ def fetch_post_content(page, post_url, post=None):
     return str(content), html_to_markdown(content)
 
 
+# Attributes whose value a browser may load or navigate to.
+URL_ATTRIBUTES = frozenset({
+    "href", "src", "xlink:href", "action", "formaction", "poster",
+    "background", "data", "srcdoc",
+})
+
+
+def sanitise_html(fragment):
+    """Return an HTML fragment with active content removed (sanitise_content)."""
+    if BeautifulSoup is None:
+        return html.escape(fragment)
+    soup = BeautifulSoup(fragment, "html.parser")
+    sanitise_content(soup)
+    return str(soup)
+
+
 def sanitise_content(content):
     """Remove active content before caching, exporting, or emailing a post."""
-    for element in content.find_all(
-        ["script", "style", "iframe", "object", "embed", "form", "input", "button"]
-    ):
+    for element in content.find_all([
+        "script", "style", "iframe", "frame", "frameset", "object", "embed",
+        "applet", "form", "input", "button", "meta", "link", "base", "svg",
+        "math", "template",
+    ]):
         element.decompose()
     for element in content.find_all(
         class_=re.compile(r"paywall|subscribe-widget|footer|CTAButton", re.I)
@@ -1013,8 +1046,12 @@ def sanitise_content(content):
         for attribute in list(element.attrs):
             if attribute.lower().startswith("on"):
                 del element.attrs[attribute]
-        for attribute in ("href", "src"):
+        for attribute in list(element.attrs):
+            if attribute.lower() not in URL_ATTRIBUTES:
+                continue
             value = element.get(attribute)
+            if isinstance(value, list):
+                value = " ".join(value)
             if value and urlparse(value.strip()).scheme.lower() in {
                 "javascript",
                 "data",
@@ -1140,7 +1177,10 @@ def post_html(post, body_html, heading="h1"):
         if subtitle else ""
     )
     post_date = html.escape(post["date"])
-    if not body_html:
+    if body_html:
+        # Cached HTML may predate the current sanitiser, so check it again.
+        body_html = sanitise_html(body_html)
+    else:
         markdown = post.get("markdown")
         body_html = (
             f"<pre>{html.escape(markdown)}</pre>" if markdown
@@ -1244,9 +1284,17 @@ def deliver_email(smtp, post, html_content):
         return replacement
 
 
-def safe_filename(text, fallback="post"):
-    """Reduce untrusted text to a short name safe to use as a path component."""
-    return re.sub(r"[^\w\-]", "_", str(text or ""))[:80].strip("_") or fallback
+def safe_filename(text, fallback="post", limit=80):
+    """Reduce untrusted text to a short name safe to use as a path component.
+
+    Text cut to ``limit`` characters ends in a short hash of the whole text,
+    so different long names stay different.
+    """
+    name = re.sub(r"[^\w\-]", "_", str(text or ""))
+    if len(name) > limit:
+        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+        name = f"{name[:limit - 9]}-{digest}"
+    return name.strip("_") or fallback
 
 
 def post_filename(post, extension):
@@ -1600,7 +1648,10 @@ def main(argv=None):
 
     posts_ordered = list(reversed(posts))
     failed = []
-    # Fetched content, for building outputs when there is no cache to read.
+    # Without a cache to read back, file outputs are built from this run's
+    # fetched content, so keep it only in that case.
+    file_outputs = {"markdown", "pdf", "html"} & set(OUTPUT_MODE)
+    keep_fetched = not CACHE_DIR and bool(file_outputs)
     fetched = []
 
     if CACHE_DIR:
@@ -1681,7 +1732,8 @@ def main(argv=None):
 
         # Write to cache immediately — before any output action
         save_to_cache(post, body_md, body_html)
-        fetched.append({**post, "markdown": body_md, "html": body_html})
+        if keep_fetched:
+            fetched.append({**post, "markdown": body_md, "html": body_html})
 
         if "email" in OUTPUT_MODE:
             try:
@@ -1706,7 +1758,7 @@ def main(argv=None):
         smtp.quit()
 
     # Assemble output files from cache (covers both fresh runs and resumed runs)
-    if {"markdown", "pdf", "html"} & set(OUTPUT_MODE):
+    if file_outputs:
         if CACHE_DIR:
             yearly_posts = load_all_cached_posts(posts_ordered)
         else:

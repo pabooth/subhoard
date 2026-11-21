@@ -99,6 +99,36 @@ class CacheTests(unittest.TestCase):
         self.assertEqual([p["title"] for p in yearly["2024"]], ["Old"])
         self.assertEqual([p["title"] for p in yearly["unknown"]], ["Undated"])
 
+    def test_malformed_cache_records_are_skipped(self):
+        good = {
+            "title": "Good",
+            "subtitle": "",
+            "url": "https://example.substack.com/p/good",
+            "date": "2025-01-02",
+            "slug": "good",
+        }
+        bad = dict(good, title="Bad", url="https://example.substack.com/p/bad",
+                   slug="bad")
+        subhoard.save_to_cache(good, "Good body")
+        subhoard.save_to_cache(bad, "Bad body")
+        with open(subhoard.cache_path(bad), "w", encoding="utf-8") as f:
+            f.write('{"title": "Bad", "url": "x", "date": 20250102}')
+
+        with patch("builtins.print") as printed:
+            yearly = subhoard.load_all_cached_posts([good, bad])
+
+        self.assertEqual(dict(yearly), {"2025": [subhoard.load_from_cache(good)]})
+        self.assertIn("skipping unusable cache file", str(printed.call_args))
+
+    def test_cached_post_type_checks(self):
+        post = {"title": "T", "url": "u", "date": "2025-01-01"}
+        self.assertTrue(subhoard.is_usable_cached_post(post))
+        self.assertTrue(subhoard.is_usable_cached_post(dict(post, html=None)))
+        self.assertFalse(subhoard.is_usable_cached_post([post]))
+        self.assertFalse(subhoard.is_usable_cached_post(dict(post, date=2025)))
+        self.assertFalse(subhoard.is_usable_cached_post(dict(post, markdown=["x"])))
+        self.assertFalse(subhoard.is_usable_cached_post({"title": "T"}))
+
     def test_invalid_json_cache_is_ignored(self):
         post = {
             "title": "Broken",
@@ -266,6 +296,37 @@ class ContentSecurityTests(unittest.TestCase):
         self.assertNotIn("onclick", rendered)
         self.assertNotIn("onerror", rendered)
         self.assertIn("https://example.com/image.png", rendered)
+
+    @unittest.skipIf(
+        subhoard.BeautifulSoup is None,
+        "beautifulsoup4 is not installed",
+    )
+    def test_active_document_elements_are_removed_on_export(self):
+        cached_html = (
+            '<meta http-equiv="refresh" content="0; URL=https://attacker.example/">'
+            '<base href="https://attacker.example/">'
+            '<link rel="stylesheet" href="https://attacker.example/x.css">'
+            '<svg><a xlink:href="javascript:alert(1)">x</a></svg>'
+            '<a xlink:href="javascript:alert(2)">y</a>'
+            "<p>Kept <strong>formatting</strong> and "
+            '<a href="https://example.com/">a link</a></p>'
+        )
+        post = {
+            "title": "T",
+            "subtitle": "",
+            "url": "https://example.substack.com/p/t",
+            "date": "2026-01-01",
+        }
+        with patch.object(subhoard, "SUBSTACK_URL", "https://example.substack.com"):
+            rendered = subhoard.post_html(post, cached_html)
+            email = subhoard.build_email_html(post, cached_html)
+
+        for page in (rendered, email):
+            self.assertNotIn("attacker.example", page)
+            self.assertNotIn("javascript:", page)
+            self.assertNotIn("<meta http-equiv", page)
+            self.assertIn("<p>Kept <strong>formatting</strong>", page)
+            self.assertIn('<a href="https://example.com/">a link</a>', page)
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -918,6 +979,25 @@ class PerPostExportTests(unittest.TestCase):
         self.assertIn("<h1>First</h1>", page)
         self.assertIn("<p>First body</p>", page)
 
+    def test_long_slugs_with_a_shared_prefix_do_not_collide(self):
+        prefix = "a" * 90
+        first = dict(self.posts["2024"][0], slug=prefix + "-one",
+                     markdown="Body one")
+        second = dict(first, slug=prefix + "-two",
+                      url="https://example.substack.com/p/two",
+                      markdown="Body two")
+        subhoard.write_markdown_files({"2024": [first, second]})
+
+        files = self.files()
+        self.assertEqual(len(files), 2)
+        bodies = []
+        for name in files:
+            self.assertLessEqual(len(os.path.basename(name)), 80 + 15)
+            with open(os.path.join(self.dir, name), encoding="utf-8") as f:
+                bodies.append(f.read())
+        self.assertTrue(any("Body one" in body for body in bodies))
+        self.assertTrue(any("Body two" in body for body in bodies))
+
     def test_post_filenames_are_safe(self):
         post = {"title": "../../etc/passwd", "date": "../2024-01-01", "url": ""}
         name = subhoard.post_filename(post, "md")
@@ -927,7 +1007,12 @@ class PerPostExportTests(unittest.TestCase):
 
     def test_per_post_setting(self):
         config = {"PER_POST": "true"}
-        with patch.dict(subhoard.FILE_CONFIG, config, clear=True):
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("SUBHOARD_")}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.dict(subhoard.FILE_CONFIG, config, clear=True),
+        ):
             parser = subhoard.build_parser()
             subhoard.configure_from_args(parser.parse_args(["--dry-run"]), parser)
             self.assertTrue(subhoard.PER_POST)
