@@ -7,6 +7,13 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Added
+
+- Settings can be read from a `KEY=VALUE` config file, `~/.shconfig` by
+  default, or a path given with `--config` or `SUBHOARD_CONFIG`.
+  Command-line arguments and environment variables take precedence over it.
+
 ## [2.3.0] - 2026-11-21
 
 Documentation cleanup

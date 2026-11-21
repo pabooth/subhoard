@@ -62,10 +62,81 @@ EMAIL_DELAY = 0.5
 DRY_RUN = False
 LOG_FILE = None
 
+# Settings read from the config file. Each key is a SUBHOARD_* environment
+# variable name without its prefix; environment variables take precedence.
+DEFAULT_CONFIG_FILE = "~/.shconfig"
+CONFIG_KEYS = frozenset({
+    "URL", "OUTPUT", "COOKIES_FILE", "START_DATE", "FETCH_DELAY",
+    "EMAIL_DELAY", "CACHE_DIR", "DIGEST_DIR", "PDF_DIR", "LOG_FILE",
+    "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD",
+    "SMTP_SECURITY", "FROM_ADDRESS", "TO_ADDRESS",
+})
+FILE_CONFIG = {}
+
 
 def env(name, default=None):
-    """Return a namespaced environment setting."""
-    return os.environ.get(f"SUBHOARD_{name}", default)
+    """Return a setting from SUBHOARD_* environment or the config file."""
+    value = os.environ.get(f"SUBHOARD_{name}")
+    if value is None:
+        value = FILE_CONFIG.get(name, default)
+    return value
+
+
+def parse_config_file(path):
+    """Parse a KEY=VALUE config file into a settings dict.
+
+    Keys use the environment variable names, with or without the SUBHOARD_
+    prefix. Blank lines, ``#`` comments and a leading ``export`` are ignored,
+    and matching surrounding quotes are stripped from values.
+    """
+    settings = {}
+    with open(path, encoding="utf-8") as config_file:
+        for number, raw_line in enumerate(config_file, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].lstrip()
+            key, sep, value = line.partition("=")
+            if not sep:
+                raise ValueError(f"{path}:{number}: expected KEY=VALUE")
+            key = key.strip().upper()
+            key = key.removeprefix("SUBHOARD_")
+            if key not in CONFIG_KEYS:
+                raise ValueError(f"{path}:{number}: unknown setting {key}")
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            settings[key] = value
+    return settings
+
+
+def load_config(argv=None):
+    """Load the config file named by --config, SUBHOARD_CONFIG or the default.
+
+    A missing default config file is ignored; a missing file that was named
+    explicitly is an error.
+    """
+    global FILE_CONFIG
+    pre_parser = argparse.ArgumentParser(prog="subhoard", add_help=False)
+    pre_parser.add_argument("--config")
+    known, _ = pre_parser.parse_known_args(argv)
+    path = known.config or os.environ.get("SUBHOARD_CONFIG")
+    explicit = bool(path)
+    path = os.path.expanduser(path or DEFAULT_CONFIG_FILE)
+
+    if not explicit and not os.path.exists(path):
+        FILE_CONFIG = {}
+        return None
+    try:
+        FILE_CONFIG = parse_config_file(path)
+    except OSError as exc:
+        pre_parser.error(f"cannot read config file {path}: {exc.strerror}")
+    except ValueError as exc:
+        pre_parser.error(str(exc))
+    if "SMTP_PASSWORD" in FILE_CONFIG:
+        warn_if_cookie_file_is_exposed(path)
+    return path
 
 
 def env_float(name, default):
@@ -94,6 +165,14 @@ def build_parser():
         "--version",
         action="version",
         version=f"%(prog)s {read_version()}",
+    )
+    parser.add_argument(
+        "--config",
+        metavar="PATH",
+        help=(
+            "KEY=VALUE settings file using SUBHOARD_* names "
+            f"(env: SUBHOARD_CONFIG, default: {DEFAULT_CONFIG_FILE})."
+        ),
     )
     parser.add_argument(
         "--url",
@@ -370,7 +449,7 @@ def load_cookies(path):
 
 
 def warn_if_cookie_file_is_exposed(path):
-    """Warn when a sensitive cookie export is readable by other local users."""
+    """Warn when a sensitive file is readable by other local users."""
     if os.name != "posix":
         return
     try:
@@ -1146,6 +1225,7 @@ def write_pdf_files(yearly_posts):
 
 def main(argv=None):
     """Parse arguments, validate configuration, and run the archive pipeline."""
+    load_config(argv)
     parser = build_parser()
     args = parser.parse_args(argv)
     configure_from_args(args, parser)

@@ -292,6 +292,78 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(subhoard.SUBSTACK_URL, "https://example.substack.com")
         self.assertEqual(subhoard.OUTPUT_MODE, ["digest", "pdf"])
 
+    def write_config(self, text):
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".shconfig", delete=False, encoding="utf-8"
+        ) as config:
+            config.write(text)
+        self.addCleanup(os.unlink, config.name)
+        return config.name
+
+    def test_config_file_supplies_defaults_below_env_and_cli(self):
+        path = self.write_config(
+            "# comment\n"
+            "SUBHOARD_URL=https://file.substack.com\n"
+            "export output = 'pdf'\n"
+            'cache_dir="file_cache"\n'
+            "FETCH_DELAY=2.5\n"
+        )
+        self.addCleanup(setattr, subhoard, "FILE_CONFIG", {})
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("SUBHOARD_")}
+        env["SUBHOARD_CACHE_DIR"] = "env_cache"
+        with patch.dict(os.environ, env, clear=True):
+            argv = ["--config", path, "--fetch-delay", "3"]
+            self.assertEqual(subhoard.load_config(argv), path)
+            parser = subhoard.build_parser()
+            args = parser.parse_args(argv)
+            subhoard.configure_from_args(args, parser)
+
+        self.assertEqual(subhoard.SUBSTACK_URL, "https://file.substack.com")
+        self.assertEqual(subhoard.OUTPUT_MODE, ["pdf"])
+        self.assertEqual(subhoard.CACHE_DIR, "env_cache")
+        self.assertEqual(subhoard.FETCH_DELAY, 3.0)
+
+    def test_config_file_path_from_environment(self):
+        path = self.write_config("URL=https://env-config.substack.com\n")
+        self.addCleanup(setattr, subhoard, "FILE_CONFIG", {})
+        with patch.dict(os.environ, {"SUBHOARD_CONFIG": path}):
+            self.assertEqual(subhoard.load_config([]), path)
+        self.assertEqual(
+            subhoard.FILE_CONFIG, {"URL": "https://env-config.substack.com"}
+        )
+
+    def test_missing_default_config_is_ignored(self):
+        self.addCleanup(setattr, subhoard, "FILE_CONFIG", {})
+        with tempfile.TemporaryDirectory() as home, patch.dict(
+            os.environ, {"HOME": home}
+        ):
+            os.environ.pop("SUBHOARD_CONFIG", None)
+            self.assertIsNone(subhoard.load_config([]))
+        self.assertEqual(subhoard.FILE_CONFIG, {})
+
+    def test_default_config_is_read_from_home(self):
+        self.addCleanup(setattr, subhoard, "FILE_CONFIG", {})
+        with tempfile.TemporaryDirectory() as home, patch.dict(
+            os.environ, {"HOME": home}
+        ):
+            os.environ.pop("SUBHOARD_CONFIG", None)
+            path = os.path.join(home, ".shconfig")
+            with open(path, "w", encoding="utf-8") as config:
+                config.write("URL=https://home.substack.com\n")
+            self.assertEqual(subhoard.load_config([]), path)
+        self.assertEqual(subhoard.FILE_CONFIG["URL"], "https://home.substack.com")
+
+    def test_missing_explicit_config_is_an_error(self):
+        with self.assertRaises(SystemExit), patch("sys.stderr"):
+            subhoard.load_config(["--config", "/nonexistent/subhoard.conf"])
+
+    def test_config_file_rejects_unknown_and_malformed_lines(self):
+        for text in ("URLL=https://x\n", "just words\n"):
+            path = self.write_config(text)
+            with self.assertRaises(ValueError):
+                subhoard.parse_config_file(path)
+
     def test_post_navigation_is_limited_to_publication_host(self):
         with patch.object(
             subhoard,
