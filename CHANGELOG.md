@@ -7,6 +7,17 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [2.5.0] - 2026-11-21
+
+Added:
+
+The ability to output as HTML
+Individual output types for simplicity rather than an array
+Per post out option as an alternative to digest mode
+
+Fixed:
+Camoufox bug
+
 ## [2.4.2] - 2026-11-21
 
 Missing config file variables
