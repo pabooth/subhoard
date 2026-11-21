@@ -1,3 +1,4 @@
+import io
 import os
 import tempfile
 import unittest
@@ -262,7 +263,7 @@ class ConfigurationTests(unittest.TestCase):
                 subhoard, "SUBSTACK_URL", "https://example.com"
             ))
             stack.enter_context(patch.object(
-                subhoard, "OUTPUT_MODE", ["digest", "digest"]
+                subhoard, "OUTPUT_MODE", ["digest", "markdown", "digest"]
             ))
             stack.enter_context(patch.object(
                 subhoard, "START_DATE", None
@@ -274,23 +275,22 @@ class ConfigurationTests(unittest.TestCase):
                 subhoard, "EMAIL_DELAY", 0
             ))
             subhoard.validate_config()
-            self.assertEqual(subhoard.OUTPUT_MODE, ["digest"])
+            self.assertEqual(subhoard.OUTPUT_MODE, ["markdown"])
 
-    def test_cli_defaults_to_digest_and_reads_environment(self):
-        with patch.dict(
-            os.environ,
-            {
-                "SUBHOARD_URL": "https://example.substack.com",
-                "SUBHOARD_OUTPUT": "digest,pdf",
-            },
-            clear=False,
-        ):
+    def test_cli_defaults_to_markdown_and_reads_environment(self):
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("SUBHOARD_")}
+        env.update({
+            "SUBHOARD_URL": "https://example.substack.com",
+            "SUBHOARD_PDF_OUTPUT": "true",
+        })
+        with patch.dict(os.environ, env, clear=True):
             parser = subhoard.build_parser()
             args = parser.parse_args([])
             subhoard.configure_from_args(args, parser)
 
         self.assertEqual(subhoard.SUBSTACK_URL, "https://example.substack.com")
-        self.assertEqual(subhoard.OUTPUT_MODE, ["digest", "pdf"])
+        self.assertEqual(subhoard.OUTPUT_MODE, ["markdown", "pdf"])
 
     def write_config(self, text):
         with tempfile.NamedTemporaryFile(
@@ -304,7 +304,7 @@ class ConfigurationTests(unittest.TestCase):
         path = self.write_config(
             "# comment\n"
             "SUBHOARD_URL=https://file.substack.com\n"
-            "export output = 'pdf'\n"
+            "export pdf_output = 'true'\n"
             'cache_dir="file_cache"\n'
             "FETCH_DELAY=2.5\n"
         )
@@ -320,7 +320,7 @@ class ConfigurationTests(unittest.TestCase):
             subhoard.configure_from_args(args, parser)
 
         self.assertEqual(subhoard.SUBSTACK_URL, "https://file.substack.com")
-        self.assertEqual(subhoard.OUTPUT_MODE, ["pdf"])
+        self.assertEqual(subhoard.OUTPUT_MODE, ["markdown", "pdf"])
         self.assertEqual(subhoard.CACHE_DIR, "env_cache")
         self.assertEqual(subhoard.FETCH_DELAY, 3.0)
 
@@ -409,6 +409,139 @@ class ConfigurationTests(unittest.TestCase):
         with patch("sys.stderr"), self.assertRaises(SystemExit) as raised:
             self.configure_with("FREE_ONLY=maybe\n")
         self.assertEqual(raised.exception.code, 2)
+
+    def configure_outputs(self, config_text, argv=(), environ=None):
+        """Configure as a dry run, returning (outputs, stderr text)."""
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.configure_with(config_text, ["--dry-run", *argv], environ)
+        return subhoard.OUTPUT_MODE, stderr.getvalue()
+
+    def assert_usage_error(self, config_text, argv=(), environ=None):
+        with (
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            self.configure_with(config_text, argv, environ)
+        self.assertEqual(raised.exception.code, 2)
+        return stderr.getvalue()
+
+    def test_outputs_default_to_markdown_only(self):
+        self.assertEqual(self.configure_outputs("")[0], ["markdown"])
+
+    def test_outputs_are_separate_settings(self):
+        outputs, warnings = self.configure_outputs(
+            "MARKDOWN_OUTPUT=false\nPDF_OUTPUT=yes\nEMAIL_OUTPUT=0\n"
+        )
+        self.assertEqual(outputs, ["pdf"])
+        self.assertEqual(warnings, "")
+
+    def test_output_flags_override_only_their_own_setting(self):
+        outputs, _ = self.configure_outputs(
+            "PDF_OUTPUT=true\n", ["--email", "--no-markdown"]
+        )
+        self.assertEqual(outputs, ["pdf", "email"])
+
+    def test_output_environment_overrides_config_file(self):
+        outputs, _ = self.configure_outputs(
+            "PDF_OUTPUT=true\n", environ={"SUBHOARD_PDF_OUTPUT": "false"}
+        )
+        self.assertEqual(outputs, ["markdown"])
+
+    def test_all_outputs_off_leaves_none(self):
+        outputs, _ = self.configure_outputs("MARKDOWN_OUTPUT=false\n")
+        self.assertEqual(outputs, [])
+
+    def test_empty_output_setting_keeps_default(self):
+        outputs, _ = self.configure_outputs("MARKDOWN_OUTPUT=\nPDF_OUTPUT=\n")
+        self.assertEqual(outputs, ["markdown"])
+
+    def test_invalid_output_setting_is_a_usage_error(self):
+        message = self.assert_usage_error("PDF_OUTPUT=maybe\n")
+        self.assertIn("SUBHOARD_PDF_OUTPUT must be true or false", message)
+
+    def test_deprecated_output_list_sets_every_output_and_warns(self):
+        outputs, warnings = self.configure_outputs("OUTPUT=digest,pdf\n")
+        self.assertEqual(outputs, ["markdown", "pdf"])
+        self.assertIn("OUTPUT is deprecated", warnings)
+        self.assertIn("MARKDOWN_OUTPUT", warnings)
+
+        outputs, warnings = self.configure_outputs(
+            "", ["--output", "pdf", "--output", "digest"]
+        )
+        self.assertEqual(outputs, ["markdown", "pdf"])
+        self.assertIn("--output is deprecated", warnings)
+
+    def test_deprecated_output_list_turns_off_unlisted_outputs(self):
+        outputs, _ = self.configure_outputs(
+            "PDF_OUTPUT=true\n", environ={"SUBHOARD_OUTPUT": "email"}
+        )
+        self.assertEqual(outputs, ["email"])
+
+    def test_separate_flags_apply_over_deprecated_config_list(self):
+        outputs, _ = self.configure_outputs(
+            "OUTPUT=pdf\n", ["--markdown", "--no-pdf"]
+        )
+        self.assertEqual(outputs, ["markdown"])
+
+    def test_one_source_cannot_mix_output_styles(self):
+        message = self.assert_usage_error("OUTPUT=pdf\nPDF_OUTPUT=true\n")
+        self.assertIn("not both", message)
+        message = self.assert_usage_error(
+            "", ["--dry-run", "--output", "pdf", "--email"]
+        )
+        self.assertIn("not both", message)
+
+    def test_deprecated_output_list_rejects_unknown_values(self):
+        message = self.assert_usage_error(
+            "", environ={"SUBHOARD_OUTPUT": "digest,bogus"}
+        )
+        self.assertIn("SUBHOARD_OUTPUT contains invalid values: bogus", message)
+
+    def test_markdown_dir_setting_and_deprecated_digest_dir(self):
+        self.configure_outputs("")
+        self.assertEqual(subhoard.MARKDOWN_OUTPUT_DIR, "digest_export")
+
+        self.configure_outputs("MARKDOWN_DIR=md\n")
+        self.assertEqual(subhoard.MARKDOWN_OUTPUT_DIR, "md")
+
+        _, warnings = self.configure_outputs("DIGEST_DIR=old\n")
+        self.assertEqual(subhoard.MARKDOWN_OUTPUT_DIR, "old")
+        self.assertIn("DIGEST_DIR is deprecated; use MARKDOWN_DIR", warnings)
+
+        _, warnings = self.configure_outputs(
+            "MARKDOWN_DIR=md\n", ["--digest-dir", "cli"]
+        )
+        self.assertEqual(subhoard.MARKDOWN_OUTPUT_DIR, "cli")
+        self.assertIn("--digest-dir is deprecated", warnings)
+
+        message = self.assert_usage_error("MARKDOWN_DIR=md\nDIGEST_DIR=old\n")
+        self.assertIn("use MARKDOWN_DIR or DIGEST_DIR, not both", message)
+
+    def validate(self, **overrides):
+        settings = {
+            "SUBSTACK_URL": "https://example.com",
+            "OUTPUT_MODE": ["markdown"],
+            "CACHE_DIR": "post_cache",
+            "DRY_RUN": False,
+            "START_DATE": None,
+            "FETCH_DELAY": 0,
+            "EMAIL_DELAY": 0,
+            **overrides,
+        }
+        with ExitStack() as stack:
+            for name, value in settings.items():
+                stack.enter_context(patch.object(subhoard, name, value))
+            subhoard.validate_config()
+
+    def test_no_outputs_is_valid_cache_only_run(self):
+        self.validate(OUTPUT_MODE=[])
+
+    def test_no_outputs_without_cache_is_an_error(self):
+        with patch("builtins.print") as printed, self.assertRaises(SystemExit):
+            self.validate(OUTPUT_MODE=[], CACHE_DIR=None)
+        output = " ".join(str(c.args[0]) for c in printed.call_args_list)
+        self.assertIn("nothing to do", output)
+        self.validate(OUTPUT_MODE=[], CACHE_DIR=None, DRY_RUN=True)
 
     def test_smtp_password_from_config_file(self):
         self.configure_with("SMTP_PASSWORD=file-secret\n")
@@ -629,7 +762,7 @@ class PublicationNameTests(unittest.TestCase):
     def test_hostname_is_case_insensitive(self):
         self.assertEqual(self.name_for("https://WWW.Example.com"), "Example")
 
-    def test_digest_filename_uses_publication_name(self):
+    def test_markdown_filename_uses_publication_name(self):
         post = {
             "title": "A post",
             "subtitle": "",
@@ -642,10 +775,10 @@ class PublicationNameTests(unittest.TestCase):
                 patch.object(subhoard, "SUBSTACK_URL", "https://www.example.com")
             )
             stack.enter_context(
-                patch.object(subhoard, "DIGEST_OUTPUT_DIR", temp_dir)
+                patch.object(subhoard, "MARKDOWN_OUTPUT_DIR", temp_dir)
             )
             stack.enter_context(patch("builtins.print"))
-            subhoard.write_digest_files({"2026": [post]})
+            subhoard.write_markdown_files({"2026": [post]})
             self.assertEqual(os.listdir(temp_dir), ["Example_2026.md"])
 
 

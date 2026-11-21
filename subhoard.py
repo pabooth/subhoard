@@ -46,7 +46,7 @@ except ImportError:
 SUBSTACK_URL = ""
 COOKIES_FILE = "cookies.txt"
 FREE_ONLY = True
-OUTPUT_MODE = ["digest"]
+OUTPUT_MODE = ["markdown"]
 SMTP_HOST = ""
 SMTP_PORT = 587
 SMTP_USERNAME = ""
@@ -54,7 +54,7 @@ SMTP_PASSWORD = ""
 SMTP_SECURITY = "starttls"
 FROM_ADDRESS = ""
 TO_ADDRESS = ""
-DIGEST_OUTPUT_DIR = "digest_export"
+MARKDOWN_OUTPUT_DIR = "digest_export"
 PDF_OUTPUT_DIR = "pdf_export"
 CACHE_DIR = "post_cache"
 START_DATE = None
@@ -67,12 +67,20 @@ LOG_FILE = None
 # variable name without its prefix; environment variables take precedence.
 DEFAULT_CONFIG_FILE = "~/.shconfig"
 CONFIG_KEYS = frozenset({
-    "URL", "OUTPUT", "FREE_ONLY", "COOKIES_FILE", "START_DATE", "FETCH_DELAY",
-    "EMAIL_DELAY", "CACHE_DIR", "DIGEST_DIR", "PDF_DIR", "LOG_FILE",
+    "URL", "MARKDOWN_OUTPUT", "PDF_OUTPUT", "EMAIL_OUTPUT", "FREE_ONLY",
+    "COOKIES_FILE", "START_DATE", "FETCH_DELAY", "EMAIL_DELAY", "CACHE_DIR",
+    "MARKDOWN_DIR", "PDF_DIR", "LOG_FILE",
     "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD",
     "SMTP_SECURITY", "FROM_ADDRESS", "TO_ADDRESS",
 })
+# Still accepted, with a warning: OUTPUT is replaced by the separate *_OUTPUT
+# settings, and DIGEST_DIR by MARKDOWN_DIR.
+DEPRECATED_CONFIG_KEYS = frozenset({"OUTPUT", "DIGEST_DIR"})
 FILE_CONFIG = {}
+# Each output and whether it is on by default, in the order they are written.
+OUTPUT_DEFAULTS = {"markdown": True, "pdf": False, "email": False}
+# Old output names still accepted by the deprecated OUTPUT setting.
+LEGACY_OUTPUT_NAMES = {"digest": "markdown"}
 BOOLEAN_VALUES = {
     "true": True, "yes": True, "on": True, "1": True,
     "false": False, "no": False, "off": False, "0": False,
@@ -109,7 +117,7 @@ def parse_config_file(path):
                 raise ValueError(f"{path}:{number}: expected KEY=VALUE")
             key = key.upper()
             key = key.removeprefix("SUBHOARD_")
-            if key not in CONFIG_KEYS:
+            if key not in CONFIG_KEYS | DEPRECATED_CONFIG_KEYS:
                 raise ValueError(f"{path}:{number}: unknown setting {key}")
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
@@ -159,6 +167,10 @@ def build_parser():
             "Archive a Substack publication you are authorized to access "
             "as Markdown, PDF, or email."
         ),
+        epilog=(
+            "With every output turned off, Subhoard only fetches posts into "
+            "the cache (--cache-dir), so outputs can be built from it later."
+        ),
     )
     parser.add_argument(
         "--version",
@@ -178,15 +190,37 @@ def build_parser():
         default=env("URL", ""),
         help="Publication URL (env: SUBHOARD_URL).",
     )
-    parser.add_argument(
+    outputs = parser.add_argument_group(
+        "outputs",
+        "Each output is turned on or off separately and overrides only its "
+        "own setting from the environment or config file.",
+    )
+    outputs.add_argument(
+        "--markdown",
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Write yearly Markdown files (default: on; "
+            "env: SUBHOARD_MARKDOWN_OUTPUT)."
+        ),
+    )
+    outputs.add_argument(
+        "--pdf",
+        action=argparse.BooleanOptionalAction,
+        help="Write yearly PDF files (default: off; env: SUBHOARD_PDF_OUTPUT).",
+    )
+    outputs.add_argument(
+        "--email",
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Email each post (default: off; env: SUBHOARD_EMAIL_OUTPUT)."
+        ),
+    )
+    outputs.add_argument(
         "--output",
         action="append",
-        choices=("digest", "pdf", "email"),
+        choices=("markdown", "digest", "pdf", "email"),
         dest="outputs",
-        help=(
-            "Output format; repeat for multiple formats. "
-            "Defaults to digest (env: SUBHOARD_OUTPUT, comma-separated)."
-        ),
+        help="Deprecated: use --markdown, --pdf and --email.",
     )
     access = parser.add_mutually_exclusive_group()
     access.add_argument(
@@ -229,8 +263,12 @@ def build_parser():
         help="Disable the resumable content cache.",
     )
     parser.add_argument(
+        "--markdown-dir",
+        help="Markdown output directory (default: digest_export).",
+    )
+    parser.add_argument(
         "--digest-dir",
-        default=env("DIGEST_DIR", "digest_export"),
+        help="Deprecated: use --markdown-dir.",
     )
     parser.add_argument(
         "--pdf-dir",
@@ -276,36 +314,149 @@ def read_version():
             return "unknown"
 
 
+def parse_bool(raw, name, parser):
+    """Return a boolean setting's value, or None when it is unset or empty."""
+    if raw is None or not raw.strip():
+        return None
+    value = BOOLEAN_VALUES.get(raw.strip().lower())
+    if value is None:
+        parser.error(f"SUBHOARD_{name} must be true or false, not {raw!r}")
+    return value
+
+
+def setting_sources():
+    """Return (source, settings) pairs, lowest precedence first.
+
+    The command line, which takes precedence over both, is handled by the
+    callers.
+    """
+    environ = {
+        key.removeprefix("SUBHOARD_"): value
+        for key, value in os.environ.items()
+        if key.startswith("SUBHOARD_")
+    }
+    return (("config", FILE_CONFIG), ("env", environ))
+
+
+def setting_label(source, key):
+    """Name a setting the way the user wrote it in the given source."""
+    if source == "env":
+        return f"SUBHOARD_{key}"
+    if source == "cli":
+        return "--" + key.lower().replace("_", "-")
+    return key
+
+
+def warn_deprecated(old, new):
+    """Tell the user a setting they used has been renamed."""
+    print(f"warning: {old} is deprecated; use {new} instead.", file=sys.stderr)
+
+
+def resolve_renamed_setting(parser, new, old, cli_new, cli_old, default):
+    """Resolve a setting that was renamed, still accepting its old name.
+
+    Each source may use either name, but not both. Higher-precedence sources
+    override lower ones whichever name they use.
+    """
+    value = default
+    layers = [
+        (source, settings.get(new), settings.get(old))
+        for source, settings in setting_sources()
+    ]
+    layers.append(("cli", cli_new, cli_old))
+    for source, new_value, old_value in layers:
+        new_label = setting_label(source, new)
+        old_label = setting_label(source, old)
+        if new_value is not None and old_value is not None:
+            parser.error(f"use {new_label} or {old_label}, not both")
+        if old_value is not None:
+            warn_deprecated(old_label, new_label)
+            value = old_value
+        elif new_value is not None:
+            value = new_value
+    return value
+
+
+def resolve_outputs(args, parser):
+    """Return the enabled outputs, in OUTPUT_DEFAULTS order.
+
+    Each output is a separate on/off setting, and each source overrides only
+    the outputs it names. The deprecated OUTPUT list (--output on the command
+    line) instead sets every output at once: listed ones on, others off. A
+    source may use the list or the separate settings, but not both.
+    """
+    enabled = dict(OUTPUT_DEFAULTS)
+    layers = []
+    for source, settings in setting_sources():
+        raw = settings.get("OUTPUT")
+        legacy = raw.split(",") if raw and raw.strip() else None
+        separate = {
+            name: parse_bool(
+                settings.get(f"{name.upper()}_OUTPUT"),
+                f"{name.upper()}_OUTPUT",
+                parser,
+            )
+            for name in OUTPUT_DEFAULTS
+        }
+        layers.append((source, legacy, separate))
+    layers.append((
+        "cli",
+        args.outputs,
+        {name: getattr(args, name) for name in OUTPUT_DEFAULTS},
+    ))
+
+    for source, legacy, separate in layers:
+        separate = {
+            name: value for name, value in separate.items() if value is not None
+        }
+        if legacy is None:
+            enabled.update(separate)
+            continue
+        legacy_label = setting_label(source, "OUTPUT")
+        if source == "cli":
+            new_labels = [f"--{name}" for name in OUTPUT_DEFAULTS]
+        else:
+            new_labels = [
+                setting_label(source, f"{name.upper()}_OUTPUT")
+                for name in OUTPUT_DEFAULTS
+            ]
+        if separate:
+            parser.error(
+                f"use {legacy_label} or {', '.join(new_labels)}, not both"
+            )
+        warn_deprecated(legacy_label, ", ".join(new_labels))
+        names = [
+            LEGACY_OUTPUT_NAMES.get(name.strip(), name.strip())
+            for name in legacy
+            if name.strip()
+        ]
+        invalid = sorted(set(names) - set(OUTPUT_DEFAULTS))
+        if invalid:
+            parser.error(
+                f"{legacy_label} contains invalid values: {', '.join(invalid)}"
+            )
+        enabled = {name: name in names for name in OUTPUT_DEFAULTS}
+    return [name for name, on in enabled.items() if on]
+
+
 def configure_from_args(args, parser):
     """Apply parsed CLI settings to the module's runtime configuration."""
-    global CACHE_DIR, COOKIES_FILE, DIGEST_OUTPUT_DIR, DRY_RUN, EMAIL_DELAY
+    global CACHE_DIR, COOKIES_FILE, MARKDOWN_OUTPUT_DIR, DRY_RUN, EMAIL_DELAY
     global FETCH_DELAY, FREE_ONLY, FROM_ADDRESS, LOG_FILE, OUTPUT_MODE
     global PDF_OUTPUT_DIR, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT, SMTP_SECURITY
     global SMTP_USERNAME
     global START_DATE, SUBSTACK_URL, TO_ADDRESS
 
-    outputs = args.outputs
-    if outputs is None:
-        outputs = [
-            mode.strip()
-            for mode in env("OUTPUT", "digest").split(",")
-            if mode.strip()
-        ]
-    invalid_outputs = sorted(set(outputs) - {"digest", "pdf", "email"})
-    if invalid_outputs:
-        parser.error(
-            "SUBHOARD_OUTPUT contains invalid values: "
-            + ", ".join(invalid_outputs)
-        )
-
+    outputs = resolve_outputs(args, parser)
+    markdown_dir = resolve_renamed_setting(
+        parser, "MARKDOWN_DIR", "DIGEST_DIR",
+        args.markdown_dir, args.digest_dir, "digest_export",
+    )
     free_only = args.free_only
     if free_only is None:
-        raw = env("FREE_ONLY", "true")
-        free_only = BOOLEAN_VALUES.get(raw.strip().lower())
-        if free_only is None:
-            parser.error(
-                f"SUBHOARD_FREE_ONLY must be true or false, not {raw!r}"
-            )
+        free_only = parse_bool(env("FREE_ONLY"), "FREE_ONLY", parser)
+    if free_only is None:
+        free_only = True
 
     SUBSTACK_URL = args.url
     OUTPUT_MODE = outputs
@@ -315,7 +466,7 @@ def configure_from_args(args, parser):
     FETCH_DELAY = args.fetch_delay
     EMAIL_DELAY = args.email_delay
     CACHE_DIR = args.cache_dir
-    DIGEST_OUTPUT_DIR = args.digest_dir
+    MARKDOWN_OUTPUT_DIR = markdown_dir
     PDF_OUTPUT_DIR = args.pdf_dir
     DRY_RUN = args.dry_run
     LOG_FILE = args.log_file
@@ -369,17 +520,23 @@ def validate_config():
             errors.append("SUBSTACK_URL must use the standard HTTPS port")
     if not FREE_ONLY and not os.path.exists(COOKIES_FILE):
         errors.append(f"COOKIES_FILE ('{COOKIES_FILE}' not found)")
-    valid_modes = {"email", "digest", "pdf"}
-    if not isinstance(OUTPUT_MODE, (list, tuple)) or not OUTPUT_MODE:
-        errors.append("OUTPUT_MODE must contain at least one output mode")
+    if not isinstance(OUTPUT_MODE, (list, tuple)):
+        errors.append("OUTPUT_MODE must be a list of output modes")
         OUTPUT_MODE = []
-    else:
-        OUTPUT_MODE = list(dict.fromkeys(OUTPUT_MODE))
+    OUTPUT_MODE = list(dict.fromkeys(
+        LEGACY_OUTPUT_NAMES.get(mode, mode) for mode in OUTPUT_MODE
+    ))
     for mode in OUTPUT_MODE:
-        if mode not in valid_modes:
+        if mode not in OUTPUT_DEFAULTS:
             errors.append(
-                f"OUTPUT_MODE '{mode}' is invalid; valid modes: email, digest, pdf"
+                f"OUTPUT_MODE '{mode}' is invalid; valid modes: "
+                + ", ".join(OUTPUT_DEFAULTS)
             )
+    if not OUTPUT_MODE and not CACHE_DIR and not DRY_RUN:
+        errors.append(
+            "no outputs are enabled and the cache is off, so there is "
+            "nothing to do; turn on an output or set a cache directory"
+        )
     if START_DATE:
         try:
             datetime.strptime(START_DATE, "%Y-%m-%d")
@@ -1020,14 +1177,14 @@ def deliver_email(smtp, post, html_content):
         return replacement
 
 
-def write_digest_files(yearly_posts):
-    """Write one Markdown file per year into DIGEST_OUTPUT_DIR."""
-    make_private_directory(DIGEST_OUTPUT_DIR)
+def write_markdown_files(yearly_posts):
+    """Write one Markdown file per year into MARKDOWN_OUTPUT_DIR."""
+    make_private_directory(MARKDOWN_OUTPUT_DIR)
     pub_name = publication_name()
 
     for year in sorted(yearly_posts.keys()):
         posts = yearly_posts[year]
-        filename = os.path.join(DIGEST_OUTPUT_DIR, f"{pub_name}_{year}.md")
+        filename = os.path.join(MARKDOWN_OUTPUT_DIR, f"{pub_name}_{year}.md")
 
         with open(filename, "w", encoding="utf-8") as f:
             f.write(f"# {pub_name} — {year}\n\n")
@@ -1045,6 +1202,10 @@ def write_digest_files(yearly_posts):
 
         make_private_file(filename)
         print(f"  Written: {filename} ({len(posts)} posts)")
+
+
+# Former name, kept for existing integrations.
+write_digest_files = write_markdown_files
 
 
 def write_pdf_files(yearly_posts):
@@ -1246,7 +1407,13 @@ def main(argv=None):
     validate_config()
     validate_dependencies()
 
-    print(f"Output mode: {', '.join(OUTPUT_MODE)}")
+    if OUTPUT_MODE:
+        print(f"Outputs:     {', '.join(OUTPUT_MODE)}")
+    elif not DRY_RUN:
+        print(
+            f"No outputs enabled: posts will be fetched into {CACHE_DIR}/ "
+            "only, nothing else is written."
+        )
     print(f"Free only:   {FREE_ONLY}\n")
 
     smtp = None
@@ -1402,12 +1569,12 @@ def main(argv=None):
         smtp.quit()
 
     # Assemble output files from cache (covers both fresh runs and resumed runs)
-    if "digest" in OUTPUT_MODE or "pdf" in OUTPUT_MODE:
+    if "markdown" in OUTPUT_MODE or "pdf" in OUTPUT_MODE:
         yearly_posts = load_all_cached_posts(posts_ordered)
 
-        if "digest" in OUTPUT_MODE:
-            print(f"\nWriting digest files to '{DIGEST_OUTPUT_DIR}/' ...")
-            write_digest_files(yearly_posts)
+        if "markdown" in OUTPUT_MODE:
+            print(f"\nWriting Markdown files to '{MARKDOWN_OUTPUT_DIR}/' ...")
+            write_markdown_files(yearly_posts)
 
         if "pdf" in OUTPUT_MODE:
             print(f"\nWriting PDF files to '{PDF_OUTPUT_DIR}/' ...")

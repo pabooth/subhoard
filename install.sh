@@ -194,8 +194,14 @@ template = """\
 
 # Publication root URL, for example https://example.substack.com
 URL=
-# Comma-separated outputs: digest, pdf and/or email
-OUTPUT=digest
+# Outputs, each true or false. With all of them false, Subhoard only
+# fetches posts into CACHE_DIR, ready to build outputs from later.
+# Yearly Markdown files in MARKDOWN_DIR
+MARKDOWN_OUTPUT=true
+# Yearly PDF files in PDF_DIR
+PDF_OUTPUT=false
+# Each post as an email, using the settings under Email output
+EMAIL_OUTPUT=false
 # true archives public posts only; false also archives subscriber content
 # using COOKIES_FILE (same as --subscriber-content)
 FREE_ONLY=true
@@ -209,7 +215,7 @@ EMAIL_DELAY=0.5
 # Output, cache and log locations (empty CACHE_DIR disables the cache,
 # empty LOG_FILE disables the log)
 CACHE_DIR=post_cache
-DIGEST_DIR=digest_export
+MARKDOWN_DIR=digest_export
 PDF_DIR=pdf_export
 LOG_FILE=
 
