@@ -48,44 +48,37 @@ cd "$(mktemp -d)"
 git clone --quiet https://github.com/pabooth/subhoard.git
 cd subhoard
 git checkout --quiet "$(git describe --tags --abbrev=0)"
-
-python3 -m venv --clear ~/.local/share/subhoard/venv &&
-~/.local/share/subhoard/venv/bin/python -m pip install \
-  --require-hashes -r requirements.lock &&
-~/.local/share/subhoard/venv/bin/python -m pip install --no-deps . &&
-~/.local/share/subhoard/venv/bin/python -m camoufox fetch &&
-mkdir -p ~/.local/bin &&
-ln -sf ~/.local/share/subhoard/venv/bin/subhoard ~/.local/bin/subhoard &&
-subhoard --version
+./install.sh
 ```
 
-The install commands are joined with `&&`, so if any step fails, the rest are
-skipped and Subhoard is not linked into `~/.local/bin`.
+`install.sh` finds a Python 3.11 or newer interpreter and stops at the first
+step that fails, so Subhoard is linked into `~/.local/bin` only if every step
+succeeded. To use a specific interpreter, run
+`PYTHON=python3.13 ./install.sh`.
 
-What each step does:
+What the script does:
 
-- `mktemp -d` and `git clone` fetch the source into a temporary directory. It
-  can be deleted once installation finishes.
-- `git checkout ...` switches to the most recent release tag. To pin a
-  specific release, use its tag instead, for example `git checkout v2.2.0`.
-- `venv --clear` creates the environment, or empties an existing one, so the
-  same steps also perform a clean update.
-- `requirements.lock` pins every runtime dependency to an exact version and
-  SHA-256 hash, so pip refuses any package that differs from the one that was
-  tested. Subhoard itself is then installed with `--no-deps`, so no further
-  runtime packages are pulled in. Building Subhoard still downloads its build
-  backend (`setuptools`) into an isolated build environment, and that download
-  is not covered by the lock's hashes.
-- `camoufox fetch` downloads the
+- Creates the virtual environment with `venv --clear`, or empties an existing
+  one, so the same command also performs a clean update.
+- Installs dependencies from `requirements.lock`, which pins every runtime
+  dependency to an exact version and SHA-256 hash, so pip refuses any package
+  that differs from the one that was tested. Subhoard itself is then installed
+  with `--no-deps`, so no further runtime packages are pulled in. Building
+  Subhoard still downloads its build backend (`setuptools`) into an isolated
+  build environment, and that download is not covered by the lock's hashes.
+- Runs `camoufox fetch`, which downloads the
   [Camoufox](https://github.com/daijro/camoufox) browser (a modified Firefox
   build), a GeoIP database, and a browser fingerprint model from those
   projects' GitHub releases. They are stored in your user cache directory, not
   in the virtual environment. Subhoard drives this browser to read Substack's
   archive. The installed `camoufox` package version determines which browser
   build is downloaded.
-- `ln -sf` puts the `subhoard` command on your `PATH`. No virtual environment
-  needs to be activated to run it.
-- `subhoard --version` should print `subhoard` followed by the release number.
+- Links `subhoard` into `~/.local/bin`, so no virtual environment needs to be
+  activated to run it, and prints `subhoard --version` to confirm the install.
+
+To pin a specific release, check out its tag instead, for example
+`git checkout v2.2.0`. The temporary directory can be deleted once
+installation finishes.
 
 If `subhoard --version` reports `command not found`, `~/.local/bin` is not on
 your `PATH`. This is common on macOS. Add it to your shell profile (for zsh,
@@ -106,14 +99,14 @@ release needs a different one.
 
 ### Uninstalling
 
+From a Subhoard checkout:
+
 ```console
-rm ~/.local/bin/subhoard
-rm -rf ~/.local/share/subhoard
+./install.sh --uninstall
 ```
 
-To also remove the downloaded browser, run
-`~/.local/share/subhoard/venv/bin/python -m camoufox remove` before deleting
-the environment.
+This removes the downloaded Camoufox browser, `~/.local/share/subhoard`, and
+the `~/.local/bin/subhoard` link.
 
 ### Development
 

@@ -8,6 +8,11 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `install.sh` installs, updates, or uninstalls (`--uninstall`) Subhoard in
+  one command, finding a suitable Python 3.11+ interpreter automatically.
+
 ### Changed
 
 - Allow reportlab 5; the lock file now installs reportlab 5.1.0.
