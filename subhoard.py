@@ -14,6 +14,7 @@ import hashlib
 import html
 import json
 import os
+import platform
 import random
 import re
 import smtplib
@@ -45,7 +46,7 @@ except ImportError:
 SUBSTACK_URL = ""
 COOKIES_FILE = "cookies.txt"
 FREE_ONLY = True
-OUTPUT_MODE = ["digest"]
+OUTPUT_MODE = ["markdown"]
 SMTP_HOST = ""
 SMTP_PORT = 587
 SMTP_USERNAME = ""
@@ -53,25 +54,39 @@ SMTP_PASSWORD = ""
 SMTP_SECURITY = "starttls"
 FROM_ADDRESS = ""
 TO_ADDRESS = ""
-DIGEST_OUTPUT_DIR = "digest_export"
+MARKDOWN_OUTPUT_DIR = "digest_export"
 PDF_OUTPUT_DIR = "pdf_export"
+HTML_OUTPUT_DIR = "html_export"
 CACHE_DIR = "post_cache"
 START_DATE = None
 FETCH_DELAY = 1.0
 EMAIL_DELAY = 0.5
 DRY_RUN = False
+PER_POST = False
 LOG_FILE = None
 
 # Settings read from the config file. Each key is a SUBHOARD_* environment
 # variable name without its prefix; environment variables take precedence.
 DEFAULT_CONFIG_FILE = "~/.shconfig"
 CONFIG_KEYS = frozenset({
-    "URL", "OUTPUT", "COOKIES_FILE", "START_DATE", "FETCH_DELAY",
-    "EMAIL_DELAY", "CACHE_DIR", "DIGEST_DIR", "PDF_DIR", "LOG_FILE",
+    "URL", "MARKDOWN_OUTPUT", "PDF_OUTPUT", "HTML_OUTPUT", "EMAIL_OUTPUT",
+    "FREE_ONLY", "COOKIES_FILE", "START_DATE", "FETCH_DELAY", "EMAIL_DELAY",
+    "CACHE_DIR", "MARKDOWN_DIR", "PDF_DIR", "HTML_DIR", "PER_POST", "LOG_FILE",
     "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD",
     "SMTP_SECURITY", "FROM_ADDRESS", "TO_ADDRESS",
 })
+# Still accepted, with a warning: OUTPUT is replaced by the separate *_OUTPUT
+# settings, and DIGEST_DIR by MARKDOWN_DIR.
+DEPRECATED_CONFIG_KEYS = frozenset({"OUTPUT", "DIGEST_DIR"})
 FILE_CONFIG = {}
+# Each output and whether it is on by default, in the order they are written.
+OUTPUT_DEFAULTS = {"markdown": True, "pdf": False, "html": False, "email": False}
+# Old output names still accepted by the deprecated OUTPUT setting.
+LEGACY_OUTPUT_NAMES = {"digest": "markdown"}
+BOOLEAN_VALUES = {
+    "true": True, "yes": True, "on": True, "1": True,
+    "false": False, "no": False, "off": False, "0": False,
+}
 
 
 def env(name, default=None):
@@ -104,7 +119,7 @@ def parse_config_file(path):
                 raise ValueError(f"{path}:{number}: expected KEY=VALUE")
             key = key.upper()
             key = key.removeprefix("SUBHOARD_")
-            if key not in CONFIG_KEYS:
+            if key not in CONFIG_KEYS | DEPRECATED_CONFIG_KEYS:
                 raise ValueError(f"{path}:{number}: unknown setting {key}")
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
@@ -152,7 +167,11 @@ def build_parser():
         prog="subhoard",
         description=(
             "Archive a Substack publication you are authorized to access "
-            "as Markdown, PDF, or email."
+            "as Markdown, PDF, HTML, or email."
+        ),
+        epilog=(
+            "With every output turned off, Subhoard only fetches posts into "
+            "the cache (--cache-dir), so outputs can be built from it later."
         ),
     )
     parser.add_argument(
@@ -173,22 +192,61 @@ def build_parser():
         default=env("URL", ""),
         help="Publication URL (env: SUBHOARD_URL).",
     )
-    parser.add_argument(
+    outputs = parser.add_argument_group(
+        "outputs",
+        "Each output is turned on or off separately and overrides only its "
+        "own setting from the environment or config file.",
+    )
+    outputs.add_argument(
+        "--markdown",
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Write yearly Markdown files (default: on; "
+            "env: SUBHOARD_MARKDOWN_OUTPUT)."
+        ),
+    )
+    outputs.add_argument(
+        "--pdf",
+        action=argparse.BooleanOptionalAction,
+        help="Write yearly PDF files (default: off; env: SUBHOARD_PDF_OUTPUT).",
+    )
+    outputs.add_argument(
+        "--html",
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Write yearly HTML files (default: off; "
+            "env: SUBHOARD_HTML_OUTPUT)."
+        ),
+    )
+    outputs.add_argument(
+        "--email",
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Email each post (default: off; env: SUBHOARD_EMAIL_OUTPUT)."
+        ),
+    )
+    outputs.add_argument(
+        "--per-post",
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Write Markdown, PDF and HTML as one file per post in a folder per "
+            "year, instead of one file per year (default: off; "
+            "env: SUBHOARD_PER_POST)."
+        ),
+    )
+    outputs.add_argument(
         "--output",
         action="append",
-        choices=("digest", "pdf", "email"),
+        choices=("markdown", "digest", "pdf", "email"),
         dest="outputs",
-        help=(
-            "Output format; repeat for multiple formats. "
-            "Defaults to digest (env: SUBHOARD_OUTPUT, comma-separated)."
-        ),
+        help="Deprecated: use --markdown, --pdf, --html and --email.",
     )
     access = parser.add_mutually_exclusive_group()
     access.add_argument(
         "--free-only",
         action="store_true",
-        default=True,
-        help="Archive public posts only (default).",
+        default=None,
+        help="Archive public posts only (default; env: SUBHOARD_FREE_ONLY).",
     )
     access.add_argument(
         "--subscriber-content",
@@ -224,12 +282,20 @@ def build_parser():
         help="Disable the resumable content cache.",
     )
     parser.add_argument(
+        "--markdown-dir",
+        help="Markdown output directory (default: digest_export).",
+    )
+    parser.add_argument(
         "--digest-dir",
-        default=env("DIGEST_DIR", "digest_export"),
+        help="Deprecated: use --markdown-dir.",
     )
     parser.add_argument(
         "--pdf-dir",
         default=env("PDF_DIR", "pdf_export"),
+    )
+    parser.add_argument(
+        "--html-dir",
+        default=env("HTML_DIR", "html_export"),
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--log-file", default=env("LOG_FILE"))
@@ -271,39 +337,166 @@ def read_version():
             return "unknown"
 
 
+def parse_bool(raw, name, parser):
+    """Return a boolean setting's value, or None when it is unset or empty."""
+    if raw is None or not raw.strip():
+        return None
+    value = BOOLEAN_VALUES.get(raw.strip().lower())
+    if value is None:
+        parser.error(f"SUBHOARD_{name} must be true or false, not {raw!r}")
+    return value
+
+
+def setting_sources():
+    """Return (source, settings) pairs, lowest precedence first.
+
+    The command line, which takes precedence over both, is handled by the
+    callers.
+    """
+    environ = {
+        key.removeprefix("SUBHOARD_"): value
+        for key, value in os.environ.items()
+        if key.startswith("SUBHOARD_")
+    }
+    return (("config", FILE_CONFIG), ("env", environ))
+
+
+def setting_label(source, key):
+    """Name a setting the way the user wrote it in the given source."""
+    if source == "env":
+        return f"SUBHOARD_{key}"
+    if source == "cli":
+        return "--" + key.lower().replace("_", "-")
+    return key
+
+
+def warn_deprecated(old, new):
+    """Tell the user a setting they used has been renamed."""
+    print(f"warning: {old} is deprecated; use {new} instead.", file=sys.stderr)
+
+
+def resolve_renamed_setting(parser, new, old, cli_new, cli_old, default):
+    """Resolve a setting that was renamed, still accepting its old name.
+
+    Each source may use either name, but not both. Higher-precedence sources
+    override lower ones whichever name they use.
+    """
+    value = default
+    layers = [
+        (source, settings.get(new), settings.get(old))
+        for source, settings in setting_sources()
+    ]
+    layers.append(("cli", cli_new, cli_old))
+    for source, new_value, old_value in layers:
+        new_label = setting_label(source, new)
+        old_label = setting_label(source, old)
+        if new_value is not None and old_value is not None:
+            parser.error(f"use {new_label} or {old_label}, not both")
+        if old_value is not None:
+            warn_deprecated(old_label, new_label)
+            value = old_value
+        elif new_value is not None:
+            value = new_value
+    return value
+
+
+def resolve_outputs(args, parser):
+    """Return the enabled outputs, in OUTPUT_DEFAULTS order.
+
+    Each output is a separate on/off setting, and each source overrides only
+    the outputs it names. The deprecated OUTPUT list (--output on the command
+    line) instead sets every output at once: listed ones on, others off. A
+    source may use the list or the separate settings, but not both.
+    """
+    enabled = dict(OUTPUT_DEFAULTS)
+    layers = []
+    for source, settings in setting_sources():
+        raw = settings.get("OUTPUT")
+        legacy = raw.split(",") if raw and raw.strip() else None
+        separate = {
+            name: parse_bool(
+                settings.get(f"{name.upper()}_OUTPUT"),
+                f"{name.upper()}_OUTPUT",
+                parser,
+            )
+            for name in OUTPUT_DEFAULTS
+        }
+        layers.append((source, legacy, separate))
+    layers.append((
+        "cli",
+        args.outputs,
+        {name: getattr(args, name) for name in OUTPUT_DEFAULTS},
+    ))
+
+    for source, legacy, separate in layers:
+        separate = {
+            name: value for name, value in separate.items() if value is not None
+        }
+        if legacy is None:
+            enabled.update(separate)
+            continue
+        legacy_label = setting_label(source, "OUTPUT")
+        if source == "cli":
+            new_labels = [f"--{name}" for name in OUTPUT_DEFAULTS]
+        else:
+            new_labels = [
+                setting_label(source, f"{name.upper()}_OUTPUT")
+                for name in OUTPUT_DEFAULTS
+            ]
+        if separate:
+            parser.error(
+                f"use {legacy_label} or {', '.join(new_labels)}, not both"
+            )
+        warn_deprecated(legacy_label, ", ".join(new_labels))
+        names = [
+            LEGACY_OUTPUT_NAMES.get(name.strip(), name.strip())
+            for name in legacy
+            if name.strip()
+        ]
+        invalid = sorted(set(names) - set(OUTPUT_DEFAULTS))
+        if invalid:
+            parser.error(
+                f"{legacy_label} contains invalid values: {', '.join(invalid)}"
+            )
+        enabled = {name: name in names for name in OUTPUT_DEFAULTS}
+    return [name for name, on in enabled.items() if on]
+
+
 def configure_from_args(args, parser):
     """Apply parsed CLI settings to the module's runtime configuration."""
-    global CACHE_DIR, COOKIES_FILE, DIGEST_OUTPUT_DIR, DRY_RUN, EMAIL_DELAY
+    global CACHE_DIR, COOKIES_FILE, MARKDOWN_OUTPUT_DIR, DRY_RUN, EMAIL_DELAY
     global FETCH_DELAY, FREE_ONLY, FROM_ADDRESS, LOG_FILE, OUTPUT_MODE
-    global PDF_OUTPUT_DIR, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT, SMTP_SECURITY
-    global SMTP_USERNAME
+    global HTML_OUTPUT_DIR, PDF_OUTPUT_DIR, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT
+    global PER_POST, SMTP_SECURITY, SMTP_USERNAME
     global START_DATE, SUBSTACK_URL, TO_ADDRESS
 
-    outputs = args.outputs
-    if outputs is None:
-        outputs = [
-            mode.strip()
-            for mode in env("OUTPUT", "digest").split(",")
-            if mode.strip()
-        ]
-    invalid_outputs = sorted(set(outputs) - {"digest", "pdf", "email"})
-    if invalid_outputs:
-        parser.error(
-            "SUBHOARD_OUTPUT contains invalid values: "
-            + ", ".join(invalid_outputs)
-        )
+    outputs = resolve_outputs(args, parser)
+    markdown_dir = resolve_renamed_setting(
+        parser, "MARKDOWN_DIR", "DIGEST_DIR",
+        args.markdown_dir, args.digest_dir, "digest_export",
+    )
+    free_only = args.free_only
+    if free_only is None:
+        free_only = parse_bool(env("FREE_ONLY"), "FREE_ONLY", parser)
+    if free_only is None:
+        free_only = True
+    per_post = args.per_post
+    if per_post is None:
+        per_post = parse_bool(env("PER_POST"), "PER_POST", parser) or False
 
     SUBSTACK_URL = args.url
     OUTPUT_MODE = outputs
-    FREE_ONLY = args.free_only
+    FREE_ONLY = free_only
     COOKIES_FILE = args.cookies_file
     START_DATE = args.start_date
     FETCH_DELAY = args.fetch_delay
     EMAIL_DELAY = args.email_delay
     CACHE_DIR = args.cache_dir
-    DIGEST_OUTPUT_DIR = args.digest_dir
+    MARKDOWN_OUTPUT_DIR = markdown_dir
     PDF_OUTPUT_DIR = args.pdf_dir
+    HTML_OUTPUT_DIR = args.html_dir
     DRY_RUN = args.dry_run
+    PER_POST = per_post
     LOG_FILE = args.log_file
     SMTP_HOST = args.smtp_host
     SMTP_PORT = args.smtp_port
@@ -355,17 +548,23 @@ def validate_config():
             errors.append("SUBSTACK_URL must use the standard HTTPS port")
     if not FREE_ONLY and not os.path.exists(COOKIES_FILE):
         errors.append(f"COOKIES_FILE ('{COOKIES_FILE}' not found)")
-    valid_modes = {"email", "digest", "pdf"}
-    if not isinstance(OUTPUT_MODE, (list, tuple)) or not OUTPUT_MODE:
-        errors.append("OUTPUT_MODE must contain at least one output mode")
+    if not isinstance(OUTPUT_MODE, (list, tuple)):
+        errors.append("OUTPUT_MODE must be a list of output modes")
         OUTPUT_MODE = []
-    else:
-        OUTPUT_MODE = list(dict.fromkeys(OUTPUT_MODE))
+    OUTPUT_MODE = list(dict.fromkeys(
+        LEGACY_OUTPUT_NAMES.get(mode, mode) for mode in OUTPUT_MODE
+    ))
     for mode in OUTPUT_MODE:
-        if mode not in valid_modes:
+        if mode not in OUTPUT_DEFAULTS:
             errors.append(
-                f"OUTPUT_MODE '{mode}' is invalid; valid modes: email, digest, pdf"
+                f"OUTPUT_MODE '{mode}' is invalid; valid modes: "
+                + ", ".join(OUTPUT_DEFAULTS)
             )
+    if not OUTPUT_MODE and not CACHE_DIR and not DRY_RUN:
+        errors.append(
+            "no outputs are enabled and the cache is off, so there is "
+            "nothing to do; turn on an output or set a cache directory"
+        )
     if START_DATE:
         try:
             datetime.strptime(START_DATE, "%Y-%m-%d")
@@ -566,7 +765,7 @@ def load_all_cached_posts(posts=None):
             if path
         }
 
-    yearly = defaultdict(list)
+    loaded = []
     seen_posts = set()
     for fname in sorted(os.listdir(CACHE_DIR)):
         if not fname.endswith(".json"):
@@ -577,14 +776,37 @@ def load_all_cached_posts(posts=None):
         try:
             with open(path, encoding="utf-8") as f:
                 post = json.load(f)
-            identity = post.get("url") or post.get("slug") or path
-            if identity in seen_posts:
-                continue
-            seen_posts.add(identity)
-            year = post.get("date", "")[:4] or "unknown"
-            yearly[year].append(post)
-        except (OSError, json.JSONDecodeError, AttributeError):
-            pass
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not is_usable_cached_post(post):
+            print(f"  Warning: skipping unusable cache file {fname}")
+            continue
+        identity = post.get("url") or post.get("slug") or path
+        if identity in seen_posts:
+            continue
+        seen_posts.add(identity)
+        loaded.append(post)
+    return group_by_year(loaded)
+
+
+def is_usable_cached_post(post):
+    """Whether a cache record has the fields, of the types, outputs rely on."""
+    if not isinstance(post, dict):
+        return False
+    if not all(isinstance(post.get(key), str) for key in ("title", "url", "date")):
+        return False
+    return all(
+        post.get(key) is None or isinstance(post.get(key), str)
+        for key in ("subtitle", "slug", "markdown", "html")
+    )
+
+
+def group_by_year(posts):
+    """Group post dicts by year, each year in chronological order."""
+    yearly = defaultdict(list)
+    for post in posts:
+        year = (post.get("date") or "")[:4] or "unknown"
+        yearly[year].append(post)
     for posts_in_year in yearly.values():
         posts_in_year.sort(
             key=lambda post: (post.get("date", ""), post.get("title", ""))
@@ -792,11 +1014,29 @@ def fetch_post_content(page, post_url, post=None):
     return str(content), html_to_markdown(content)
 
 
+# Attributes whose value a browser may load or navigate to.
+URL_ATTRIBUTES = frozenset({
+    "href", "src", "xlink:href", "action", "formaction", "poster",
+    "background", "data", "srcdoc",
+})
+
+
+def sanitise_html(fragment):
+    """Return an HTML fragment with active content removed (sanitise_content)."""
+    if BeautifulSoup is None:
+        return html.escape(fragment)
+    soup = BeautifulSoup(fragment, "html.parser")
+    sanitise_content(soup)
+    return str(soup)
+
+
 def sanitise_content(content):
     """Remove active content before caching, exporting, or emailing a post."""
-    for element in content.find_all(
-        ["script", "style", "iframe", "object", "embed", "form", "input", "button"]
-    ):
+    for element in content.find_all([
+        "script", "style", "iframe", "frame", "frameset", "object", "embed",
+        "applet", "form", "input", "button", "meta", "link", "base", "svg",
+        "math", "template",
+    ]):
         element.decompose()
     for element in content.find_all(
         class_=re.compile(r"paywall|subscribe-widget|footer|CTAButton", re.I)
@@ -806,13 +1046,24 @@ def sanitise_content(content):
         for attribute in list(element.attrs):
             if attribute.lower().startswith("on"):
                 del element.attrs[attribute]
-        for attribute in ("href", "src"):
+        for attribute in list(element.attrs):
+            if attribute.lower() not in URL_ATTRIBUTES:
+                continue
             value = element.get(attribute)
-            if value and urlparse(value.strip()).scheme.lower() in {
-                "javascript",
-                "data",
-                "file",
-            }:
+            if isinstance(value, list):
+                value = " ".join(value)
+            # Browsers ignore control characters and spaces in a URL's
+            # scheme, and some Python 3.11 releases do not strip them.
+            checked = re.sub(r"[\x00-\x20\x7f]", "", value or "")
+            if not checked:
+                continue
+            try:
+                scheme = urlparse(checked).scheme.lower()
+            except ValueError:
+                # Unparseable, such as an unmatched "[": not worth keeping.
+                del element.attrs[attribute]
+                continue
+            if scheme in {"javascript", "vbscript", "data", "file"}:
                 del element.attrs[attribute]
 
 
@@ -867,58 +1118,92 @@ def html_to_markdown(soup_element):
     return "\n".join(lines).strip()
 
 
-def build_email_html(post, body_html):
-    """Wrap a post's HTML body in a styled email-ready HTML document."""
-    pub_name = publication_name()
-    title = html.escape(post["title"])
-    subtitle = html.escape(post["subtitle"])
-    post_url = html.escape(post["url"], quote=True)
+ARCHIVE_CSS = """
+  body {
+    font-family: Georgia, serif; max-width: 680px;
+    margin: 0 auto; padding: 2em 1em;
+    color: #1a1a1a; background: #fff;
+  }
+  h1 { font-size: 1.8em; margin: 0 0 0.25em 0; line-height: 1.3; }
+  .meta {
+    font-size: 0.85em; color: #888; margin-bottom: 2em;
+    border-bottom: 1px solid #eee; padding-bottom: 1em;
+  }
+  .meta a { color: #888; }
+  img { max-width: 100%; height: auto; }
+  blockquote {
+    border-left: 3px solid #ddd; margin: 1.5em 0;
+    padding: 0.5em 1em; color: #555;
+  }
+  a { color: #1a56db; }
+  pre { white-space: pre-wrap; }
+  article + article {
+    margin-top: 3em; padding-top: 2em; border-top: 2px solid #ddd;
+  }
+  .footer {
+    margin-top: 3em; padding-top: 1em;
+    border-top: 1px solid #eee; font-size: 0.8em; color: #aaa;
+  }
+"""
+
+
+def html_document(title, content):
+    """Wrap HTML content in a standalone, styled page.
+
+    ``title`` and ``content`` must already be escaped.
+    """
     publication_url = html.escape(SUBSTACK_URL, quote=True)
-    subtitle_block = (
-        f"<p style='color:#666;font-size:1.1em;margin:0 0 1.5em 0'>{subtitle}</p>"
-        if post["subtitle"] else ""
-    )
-    post_date = html.escape(post["date"])
     return f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  body {{
-    font-family: Georgia, serif; max-width: 680px;
-    margin: 0 auto; padding: 2em 1em;
-    color: #1a1a1a; background: #fff;
-  }}
-  h1 {{ font-size: 1.8em; margin: 0 0 0.25em 0; line-height: 1.3; }}
-  .meta {{
-    font-size: 0.85em; color: #888; margin-bottom: 2em;
-    border-bottom: 1px solid #eee; padding-bottom: 1em;
-  }}
-  .meta a {{ color: #888; }}
-  img {{ max-width: 100%; height: auto; }}
-  blockquote {{
-    border-left: 3px solid #ddd; margin: 1.5em 0;
-    padding: 0.5em 1em; color: #555;
-  }}
-  a {{ color: #1a56db; }}
-  .footer {{
-    margin-top: 3em; padding-top: 1em;
-    border-top: 1px solid #eee; font-size: 0.8em; color: #aaa;
-  }}
-</style>
+<title>{title}</title>
+<style>{ARCHIVE_CSS}</style>
 </head>
 <body>
-  <h1>{title}</h1>
-  {subtitle_block}
-  <div class="meta">
-    {pub_name} &middot; {post_date} &middot; <a href="{post_url}">View original</a>
-  </div>
-  {body_html}
+{content}
   <div class="footer">Archived from
     <a href="{publication_url}">{publication_url}</a></div>
 </body>
 </html>"""
+
+
+def post_html(post, body_html, heading="h1"):
+    """Return a post's title, subtitle, details line and body as HTML.
+
+    Falls back to the cached Markdown, shown as plain text, for posts cached
+    without HTML.
+    """
+    pub_name = html.escape(publication_name())
+    title = html.escape(post["title"])
+    subtitle = html.escape(post.get("subtitle") or "")
+    post_url = html.escape(post["url"], quote=True)
+    subtitle_block = (
+        f"<p style='color:#666;font-size:1.1em;margin:0 0 1.5em 0'>{subtitle}</p>"
+        if subtitle else ""
+    )
+    post_date = html.escape(post["date"])
+    if body_html:
+        # Cached HTML may predate the current sanitiser, so check it again.
+        body_html = sanitise_html(body_html)
+    else:
+        markdown = post.get("markdown")
+        body_html = (
+            f"<pre>{html.escape(markdown)}</pre>" if markdown
+            else "<p><em>Content unavailable.</em></p>"
+        )
+    return f"""  <{heading}>{title}</{heading}>
+  {subtitle_block}
+  <div class="meta">
+    {pub_name} &middot; {post_date} &middot; <a href="{post_url}">View original</a>
+  </div>
+  {body_html}"""
+
+
+def build_email_html(post, body_html):
+    """Wrap a post's HTML body in a styled email-ready HTML document."""
+    return html_document(html.escape(post["title"]), post_html(post, body_html))
 
 
 def connect_smtp():
@@ -1006,35 +1291,116 @@ def deliver_email(smtp, post, html_content):
         return replacement
 
 
-def write_digest_files(yearly_posts):
-    """Write one Markdown file per year into DIGEST_OUTPUT_DIR."""
-    make_private_directory(DIGEST_OUTPUT_DIR)
-    pub_name = publication_name()
+def safe_filename(text, fallback="post", limit=80):
+    """Reduce untrusted text to a short name safe to use as a path component.
 
+    Text cut to ``limit`` characters ends in a short hash of the whole text,
+    so different long names stay different.
+    """
+    name = re.sub(r"[^\w\-]", "_", str(text or ""))
+    if len(name) > limit:
+        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+        name = f"{name[:limit - 9]}-{digest}"
+    return name.strip("_") or fallback
+
+
+def post_filename(post, extension):
+    """Return a per-post file name such as ``2024-03-15-post-slug.pdf``."""
+    slug = safe_filename(
+        post.get("slug")
+        or post.get("url", "").rstrip("/").split("/")[-1]
+        or post.get("title")
+    )
+    date = re.sub(r"[^0-9\-]", "", post.get("date") or "")[:10]
+    return f"{date}-{slug}.{extension}" if date else f"{slug}.{extension}"
+
+
+def output_files(directory, yearly_posts, extension):
+    """Yield (path, title, posts, year) for each file an output writes.
+
+    Normally there is one file per year holding that year's posts. With
+    PER_POST there is one file per post, in a folder per year.
+    """
+    make_private_directory(directory)
+    pub_name = publication_name()
     for year in sorted(yearly_posts.keys()):
         posts = yearly_posts[year]
-        filename = os.path.join(DIGEST_OUTPUT_DIR, f"{pub_name}_{year}.md")
+        if not PER_POST:
+            path = os.path.join(directory, f"{pub_name}_{year}.{extension}")
+            yield path, f"{pub_name} — {year}", posts, year
+            continue
+        year_dir = os.path.join(directory, safe_filename(year, "unknown"))
+        make_private_directory(year_dir)
+        for post in posts:
+            path = os.path.join(year_dir, post_filename(post, extension))
+            yield path, post["title"], [post], year
 
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(f"# {pub_name} — {year}\n\n")
-            f.write(f"*{len(posts)} posts*\n\n")
-            f.write("---\n\n")
 
-            for post in posts:
-                f.write(f"## {post['title']}\n\n")
-                if post["subtitle"]:
-                    f.write(f"*{post['subtitle']}*\n\n")
-                f.write(f"**Date:** {post['date']}  \n")
-                f.write(f"**Source:** {post['url']}\n\n")
-                f.write(post.get("markdown") or "*Content unavailable.*")
-                f.write("\n\n---\n\n")
+def report_written(path, posts):
+    """Log a written output file."""
+    if PER_POST:
+        print(f"  Written: {path}")
+    else:
+        print(f"  Written: {path} ({len(posts)} posts)")
 
-        make_private_file(filename)
-        print(f"  Written: {filename} ({len(posts)} posts)")
+
+def markdown_post(post, heading):
+    """Return a post as Markdown, under a heading of the given level."""
+    parts = [f"{heading} {post['title']}\n\n"]
+    if post.get("subtitle"):
+        parts.append(f"*{post['subtitle']}*\n\n")
+    parts.append(f"**Date:** {post['date']}  \n")
+    parts.append(f"**Source:** {post['url']}\n\n")
+    parts.append(post.get("markdown") or "*Content unavailable.*")
+    return "".join(parts)
+
+
+def write_markdown_files(yearly_posts):
+    """Write Markdown files into MARKDOWN_OUTPUT_DIR (see output_files)."""
+    files = output_files(MARKDOWN_OUTPUT_DIR, yearly_posts, "md")
+    for path, title, posts, _year in files:
+        with open(path, "w", encoding="utf-8") as f:
+            if PER_POST:
+                f.write(markdown_post(posts[0], "#") + "\n")
+            else:
+                f.write(f"# {title}\n\n")
+                f.write(f"*{len(posts)} posts*\n\n")
+                f.write("---\n\n")
+                for post in posts:
+                    f.write(markdown_post(post, "##"))
+                    f.write("\n\n---\n\n")
+        make_private_file(path)
+        report_written(path, posts)
+
+
+# Former name, kept for existing integrations.
+write_digest_files = write_markdown_files
+
+
+def write_html_files(yearly_posts):
+    """Write HTML files into HTML_OUTPUT_DIR (see output_files)."""
+    files = output_files(HTML_OUTPUT_DIR, yearly_posts, "html")
+    for path, title, posts, _year in files:
+        title = html.escape(title)
+        if PER_POST:
+            content = post_html(posts[0], posts[0].get("html"))
+        else:
+            articles = "\n".join(
+                f"<article>\n{post_html(post, post.get('html'), 'h2')}\n</article>"
+                for post in posts
+            )
+            content = (
+                f"  <h1>{title}</h1>\n"
+                f"  <div class=\"meta\">{len(posts)} posts</div>\n{articles}"
+            )
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html_document(title, content))
+        make_private_file(path)
+        report_written(path, posts)
 
 
 def write_pdf_files(yearly_posts):
-    """Write one PDF per year into PDF_OUTPUT_DIR."""
+    """Write PDF files into PDF_OUTPUT_DIR (see output_files)."""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -1047,7 +1413,6 @@ def write_pdf_files(yearly_posts):
         Spacer,
     )
 
-    make_private_directory(PDF_OUTPUT_DIR)
     pub_name = publication_name()
 
     base_styles = getSampleStyleSheet()
@@ -1164,10 +1529,8 @@ def write_pdf_files(yearly_posts):
 
         return flowables
 
-    for year in sorted(yearly_posts.keys()):
-        posts = yearly_posts[year]
-        filename = os.path.join(PDF_OUTPUT_DIR, f"{pub_name}_{year}.pdf")
-
+    files = output_files(PDF_OUTPUT_DIR, yearly_posts, "pdf")
+    for filename, title, posts, year in files:
         doc = SimpleDocTemplate(
             filename,
             pagesize=A4,
@@ -1175,22 +1538,23 @@ def write_pdf_files(yearly_posts):
             rightMargin=20 * mm,
             topMargin=20 * mm,
             bottomMargin=20 * mm,
-            title=f"{pub_name} — {year}",
+            title=title,
             author=pub_name,
         )
 
         story = []
 
-        # Cover / year header
-        story.append(Spacer(1, 30 * mm))
-        story.append(Paragraph(safe(pub_name), styles["year_title"]))
-        story.append(Paragraph(str(year), styles["year_title"]))
-        story.append(Spacer(1, 4 * mm))
-        story.append(Paragraph(f"{len(posts)} posts", styles["year_sub"]))
-        story.append(HRFlowable(width="100%", thickness=1,
-                                color=colors.HexColor("#cccccc"),
-                                spaceAfter=0))
-        story.append(PageBreak())
+        if not PER_POST:
+            # Cover / year header
+            story.append(Spacer(1, 30 * mm))
+            story.append(Paragraph(safe(pub_name), styles["year_title"]))
+            story.append(Paragraph(safe(year), styles["year_title"]))
+            story.append(Spacer(1, 4 * mm))
+            story.append(Paragraph(f"{len(posts)} posts", styles["year_sub"]))
+            story.append(HRFlowable(width="100%", thickness=1,
+                                    color=colors.HexColor("#cccccc"),
+                                    spaceAfter=0))
+            story.append(PageBreak())
 
         for post in posts:
             story.append(Paragraph(safe(post["title"]), styles["post_title"]))
@@ -1214,7 +1578,7 @@ def write_pdf_files(yearly_posts):
 
         doc.build(story)
         make_private_file(filename)
-        print(f"  Written: {filename} ({len(posts)} posts)")
+        report_written(filename, posts)
 
 
 def main(argv=None):
@@ -1232,7 +1596,13 @@ def main(argv=None):
     validate_config()
     validate_dependencies()
 
-    print(f"Output mode: {', '.join(OUTPUT_MODE)}")
+    if OUTPUT_MODE:
+        print(f"Outputs:     {', '.join(OUTPUT_MODE)}")
+    elif not DRY_RUN:
+        print(
+            f"No outputs enabled: posts will be fetched into {CACHE_DIR}/ "
+            "only, nothing else is written."
+        )
     print(f"Free only:   {FREE_ONLY}\n")
 
     smtp = None
@@ -1250,7 +1620,12 @@ def main(argv=None):
 
     def start_browser():
         """Launch a Camoufox browser and return (cf, browser, context, page)."""
-        cf = Camoufox(headless=True)
+        # Claim this machine's OS. A random one (e.g. Windows on a Mac) makes
+        # Camoufox randomise canvas readback, which reads as a hardened Firefox
+        # and triggers a LeakWarning on every launch.
+        host_os = {"Darwin": "macos", "Windows": "windows",
+                   "Linux": "linux"}.get(platform.system())
+        cf = Camoufox(headless=True, os=host_os)
         browser = cf.__enter__()
         context = browser.new_context()
         if not FREE_ONLY:
@@ -1280,6 +1655,11 @@ def main(argv=None):
 
     posts_ordered = list(reversed(posts))
     failed = []
+    # Without a cache to read back, file outputs are built from this run's
+    # fetched content, so keep it only in that case.
+    file_outputs = {"markdown", "pdf", "html"} & set(OUTPUT_MODE)
+    keep_fetched = not CACHE_DIR and bool(file_outputs)
+    fetched = []
 
     if CACHE_DIR:
         make_private_directory(CACHE_DIR)
@@ -1359,6 +1739,8 @@ def main(argv=None):
 
         # Write to cache immediately — before any output action
         save_to_cache(post, body_md, body_html)
+        if keep_fetched:
+            fetched.append({**post, "markdown": body_md, "html": body_html})
 
         if "email" in OUTPUT_MODE:
             try:
@@ -1383,16 +1765,23 @@ def main(argv=None):
         smtp.quit()
 
     # Assemble output files from cache (covers both fresh runs and resumed runs)
-    if "digest" in OUTPUT_MODE or "pdf" in OUTPUT_MODE:
-        yearly_posts = load_all_cached_posts(posts_ordered)
+    if file_outputs:
+        if CACHE_DIR:
+            yearly_posts = load_all_cached_posts(posts_ordered)
+        else:
+            yearly_posts = group_by_year(fetched)
 
-        if "digest" in OUTPUT_MODE:
-            print(f"\nWriting digest files to '{DIGEST_OUTPUT_DIR}/' ...")
-            write_digest_files(yearly_posts)
+        if "markdown" in OUTPUT_MODE:
+            print(f"\nWriting Markdown files to '{MARKDOWN_OUTPUT_DIR}/' ...")
+            write_markdown_files(yearly_posts)
 
         if "pdf" in OUTPUT_MODE:
             print(f"\nWriting PDF files to '{PDF_OUTPUT_DIR}/' ...")
             write_pdf_files(yearly_posts)
+
+        if "html" in OUTPUT_MODE:
+            print(f"\nWriting HTML files to '{HTML_OUTPUT_DIR}/' ...")
+            write_html_files(yearly_posts)
 
     total = len(posts_ordered)
     done  = total - len(failed)

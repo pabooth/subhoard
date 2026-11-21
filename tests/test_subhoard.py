@@ -1,3 +1,4 @@
+import io
 import os
 import tempfile
 import unittest
@@ -85,6 +86,48 @@ class CacheTests(unittest.TestCase):
             [post["title"] for post in yearly["2025"]],
             ["Older", "Newer"],
         )
+
+    def test_group_by_year_without_cache(self):
+        posts = [
+            {"title": "B", "date": "2025-02-01"},
+            {"title": "A", "date": "2025-01-01"},
+            {"title": "Old", "date": "2024-12-31"},
+            {"title": "Undated", "date": ""},
+        ]
+        yearly = subhoard.group_by_year(posts)
+        self.assertEqual([p["title"] for p in yearly["2025"]], ["A", "B"])
+        self.assertEqual([p["title"] for p in yearly["2024"]], ["Old"])
+        self.assertEqual([p["title"] for p in yearly["unknown"]], ["Undated"])
+
+    def test_malformed_cache_records_are_skipped(self):
+        good = {
+            "title": "Good",
+            "subtitle": "",
+            "url": "https://example.substack.com/p/good",
+            "date": "2025-01-02",
+            "slug": "good",
+        }
+        bad = dict(good, title="Bad", url="https://example.substack.com/p/bad",
+                   slug="bad")
+        subhoard.save_to_cache(good, "Good body")
+        subhoard.save_to_cache(bad, "Bad body")
+        with open(subhoard.cache_path(bad), "w", encoding="utf-8") as f:
+            f.write('{"title": "Bad", "url": "x", "date": 20250102}')
+
+        with patch("builtins.print") as printed:
+            yearly = subhoard.load_all_cached_posts([good, bad])
+
+        self.assertEqual(dict(yearly), {"2025": [subhoard.load_from_cache(good)]})
+        self.assertIn("skipping unusable cache file", str(printed.call_args))
+
+    def test_cached_post_type_checks(self):
+        post = {"title": "T", "url": "u", "date": "2025-01-01"}
+        self.assertTrue(subhoard.is_usable_cached_post(post))
+        self.assertTrue(subhoard.is_usable_cached_post(dict(post, html=None)))
+        self.assertFalse(subhoard.is_usable_cached_post([post]))
+        self.assertFalse(subhoard.is_usable_cached_post(dict(post, date=2025)))
+        self.assertFalse(subhoard.is_usable_cached_post(dict(post, markdown=["x"])))
+        self.assertFalse(subhoard.is_usable_cached_post({"title": "T"}))
 
     def test_invalid_json_cache_is_ignored(self):
         post = {
@@ -254,6 +297,78 @@ class ContentSecurityTests(unittest.TestCase):
         self.assertNotIn("onerror", rendered)
         self.assertIn("https://example.com/image.png", rendered)
 
+    @unittest.skipIf(
+        subhoard.BeautifulSoup is None,
+        "beautifulsoup4 is not installed",
+    )
+    def test_control_characters_do_not_hide_url_schemes(self):
+        content = subhoard.BeautifulSoup(
+            '<a href="\x01javascript:alert(1)">a</a>'
+            '<a href="  java\tscript:alert(2)">b</a>'
+            '<a href="\x7fjavascript:alert(3)">c</a>'
+            '<a href="https://example.com/">d</a>',
+            "html.parser",
+        )
+        subhoard.sanitise_content(content)
+        links = content.find_all("a")
+        self.assertEqual(
+            [link.get("href") for link in links],
+            [None, None, None, "https://example.com/"],
+        )
+
+    @unittest.skipIf(
+        subhoard.BeautifulSoup is None,
+        "beautifulsoup4 is not installed",
+    )
+    def test_unparseable_urls_are_removed_without_failing_export(self):
+        post = {
+            "title": "T",
+            "subtitle": "",
+            "url": "https://example.substack.com/p/t",
+            "date": "2026-01-01",
+        }
+        body = (
+            '<p>Before <a href="h ttps://[">broken</a> '
+            '<img src="https://[::1"> '
+            '<a href="https://example.com/">fine</a> after</p>'
+        )
+        with patch.object(subhoard, "SUBSTACK_URL", "https://example.substack.com"):
+            rendered = subhoard.post_html(post, body)
+        self.assertIn("Before <a>broken</a>", rendered)
+        self.assertNotIn("[", rendered)
+        self.assertIn('<a href="https://example.com/">fine</a> after', rendered)
+
+    @unittest.skipIf(
+        subhoard.BeautifulSoup is None,
+        "beautifulsoup4 is not installed",
+    )
+    def test_active_document_elements_are_removed_on_export(self):
+        cached_html = (
+            '<meta http-equiv="refresh" content="0; URL=https://attacker.example/">'
+            '<base href="https://attacker.example/">'
+            '<link rel="stylesheet" href="https://attacker.example/x.css">'
+            '<svg><a xlink:href="javascript:alert(1)">x</a></svg>'
+            '<a xlink:href="javascript:alert(2)">y</a>'
+            "<p>Kept <strong>formatting</strong> and "
+            '<a href="https://example.com/">a link</a></p>'
+        )
+        post = {
+            "title": "T",
+            "subtitle": "",
+            "url": "https://example.substack.com/p/t",
+            "date": "2026-01-01",
+        }
+        with patch.object(subhoard, "SUBSTACK_URL", "https://example.substack.com"):
+            rendered = subhoard.post_html(post, cached_html)
+            email = subhoard.build_email_html(post, cached_html)
+
+        for page in (rendered, email):
+            self.assertNotIn("attacker.example", page)
+            self.assertNotIn("javascript:", page)
+            self.assertNotIn("<meta http-equiv", page)
+            self.assertIn("<p>Kept <strong>formatting</strong>", page)
+            self.assertIn('<a href="https://example.com/">a link</a>', page)
+
 
 class ConfigurationTests(unittest.TestCase):
     def test_output_modes_are_deduplicated(self):
@@ -262,7 +377,7 @@ class ConfigurationTests(unittest.TestCase):
                 subhoard, "SUBSTACK_URL", "https://example.com"
             ))
             stack.enter_context(patch.object(
-                subhoard, "OUTPUT_MODE", ["digest", "digest"]
+                subhoard, "OUTPUT_MODE", ["digest", "markdown", "digest"]
             ))
             stack.enter_context(patch.object(
                 subhoard, "START_DATE", None
@@ -274,23 +389,22 @@ class ConfigurationTests(unittest.TestCase):
                 subhoard, "EMAIL_DELAY", 0
             ))
             subhoard.validate_config()
-            self.assertEqual(subhoard.OUTPUT_MODE, ["digest"])
+            self.assertEqual(subhoard.OUTPUT_MODE, ["markdown"])
 
-    def test_cli_defaults_to_digest_and_reads_environment(self):
-        with patch.dict(
-            os.environ,
-            {
-                "SUBHOARD_URL": "https://example.substack.com",
-                "SUBHOARD_OUTPUT": "digest,pdf",
-            },
-            clear=False,
-        ):
+    def test_cli_defaults_to_markdown_and_reads_environment(self):
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("SUBHOARD_")}
+        env.update({
+            "SUBHOARD_URL": "https://example.substack.com",
+            "SUBHOARD_PDF_OUTPUT": "true",
+        })
+        with patch.dict(os.environ, env, clear=True):
             parser = subhoard.build_parser()
             args = parser.parse_args([])
             subhoard.configure_from_args(args, parser)
 
         self.assertEqual(subhoard.SUBSTACK_URL, "https://example.substack.com")
-        self.assertEqual(subhoard.OUTPUT_MODE, ["digest", "pdf"])
+        self.assertEqual(subhoard.OUTPUT_MODE, ["markdown", "pdf"])
 
     def write_config(self, text):
         with tempfile.NamedTemporaryFile(
@@ -304,7 +418,7 @@ class ConfigurationTests(unittest.TestCase):
         path = self.write_config(
             "# comment\n"
             "SUBHOARD_URL=https://file.substack.com\n"
-            "export output = 'pdf'\n"
+            "export pdf_output = 'true'\n"
             'cache_dir="file_cache"\n'
             "FETCH_DELAY=2.5\n"
         )
@@ -320,7 +434,7 @@ class ConfigurationTests(unittest.TestCase):
             subhoard.configure_from_args(args, parser)
 
         self.assertEqual(subhoard.SUBSTACK_URL, "https://file.substack.com")
-        self.assertEqual(subhoard.OUTPUT_MODE, ["pdf"])
+        self.assertEqual(subhoard.OUTPUT_MODE, ["markdown", "pdf"])
         self.assertEqual(subhoard.CACHE_DIR, "env_cache")
         self.assertEqual(subhoard.FETCH_DELAY, 3.0)
 
@@ -389,6 +503,165 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(subhoard.SMTP_PORT, 2525)
         self.assertEqual(subhoard.FETCH_DELAY, 2.0)
         self.assertEqual(subhoard.EMAIL_DELAY, 0.25)
+
+    def test_free_only_from_config_file(self):
+        self.configure_with("")
+        self.assertTrue(subhoard.FREE_ONLY)
+        for value, expected in (("false", False), ("No", False),
+                                ("0", False), ("on", True)):
+            with self.subTest(value=value):
+                self.configure_with(f"FREE_ONLY={value}\n")
+                self.assertEqual(subhoard.FREE_ONLY, expected)
+
+    def test_free_only_flags_override_config_file(self):
+        self.configure_with("FREE_ONLY=false\n", ["--free-only"])
+        self.assertTrue(subhoard.FREE_ONLY)
+        self.configure_with("FREE_ONLY=true\n", ["--subscriber-content"])
+        self.assertFalse(subhoard.FREE_ONLY)
+
+    def test_invalid_free_only_is_a_usage_error(self):
+        with patch("sys.stderr"), self.assertRaises(SystemExit) as raised:
+            self.configure_with("FREE_ONLY=maybe\n")
+        self.assertEqual(raised.exception.code, 2)
+
+    def configure_outputs(self, config_text, argv=(), environ=None):
+        """Configure as a dry run, returning (outputs, stderr text)."""
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.configure_with(config_text, ["--dry-run", *argv], environ)
+        return subhoard.OUTPUT_MODE, stderr.getvalue()
+
+    def assert_usage_error(self, config_text, argv=(), environ=None):
+        with (
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            self.configure_with(config_text, argv, environ)
+        self.assertEqual(raised.exception.code, 2)
+        return stderr.getvalue()
+
+    def test_outputs_default_to_markdown_only(self):
+        self.assertEqual(self.configure_outputs("")[0], ["markdown"])
+
+    def test_outputs_are_separate_settings(self):
+        outputs, warnings = self.configure_outputs(
+            "MARKDOWN_OUTPUT=false\nPDF_OUTPUT=yes\nEMAIL_OUTPUT=0\n"
+        )
+        self.assertEqual(outputs, ["pdf"])
+        self.assertEqual(warnings, "")
+
+    def test_output_flags_override_only_their_own_setting(self):
+        outputs, _ = self.configure_outputs(
+            "PDF_OUTPUT=true\n", ["--email", "--no-markdown"]
+        )
+        self.assertEqual(outputs, ["pdf", "email"])
+
+    def test_html_output_is_a_separate_setting(self):
+        outputs, _ = self.configure_outputs(
+            "HTML_OUTPUT=true\n", ["--no-markdown"]
+        )
+        self.assertEqual(outputs, ["html"])
+
+    def test_output_environment_overrides_config_file(self):
+        outputs, _ = self.configure_outputs(
+            "PDF_OUTPUT=true\n", environ={"SUBHOARD_PDF_OUTPUT": "false"}
+        )
+        self.assertEqual(outputs, ["markdown"])
+
+    def test_all_outputs_off_leaves_none(self):
+        outputs, _ = self.configure_outputs("MARKDOWN_OUTPUT=false\n")
+        self.assertEqual(outputs, [])
+
+    def test_empty_output_setting_keeps_default(self):
+        outputs, _ = self.configure_outputs("MARKDOWN_OUTPUT=\nPDF_OUTPUT=\n")
+        self.assertEqual(outputs, ["markdown"])
+
+    def test_invalid_output_setting_is_a_usage_error(self):
+        message = self.assert_usage_error("PDF_OUTPUT=maybe\n")
+        self.assertIn("SUBHOARD_PDF_OUTPUT must be true or false", message)
+
+    def test_deprecated_output_list_sets_every_output_and_warns(self):
+        outputs, warnings = self.configure_outputs("OUTPUT=digest,pdf\n")
+        self.assertEqual(outputs, ["markdown", "pdf"])
+        self.assertIn("OUTPUT is deprecated", warnings)
+        self.assertIn("MARKDOWN_OUTPUT", warnings)
+
+        outputs, warnings = self.configure_outputs(
+            "", ["--output", "pdf", "--output", "digest"]
+        )
+        self.assertEqual(outputs, ["markdown", "pdf"])
+        self.assertIn("--output is deprecated", warnings)
+
+    def test_deprecated_output_list_turns_off_unlisted_outputs(self):
+        outputs, _ = self.configure_outputs(
+            "PDF_OUTPUT=true\n", environ={"SUBHOARD_OUTPUT": "email"}
+        )
+        self.assertEqual(outputs, ["email"])
+
+    def test_separate_flags_apply_over_deprecated_config_list(self):
+        outputs, _ = self.configure_outputs(
+            "OUTPUT=pdf\n", ["--markdown", "--no-pdf"]
+        )
+        self.assertEqual(outputs, ["markdown"])
+
+    def test_one_source_cannot_mix_output_styles(self):
+        message = self.assert_usage_error("OUTPUT=pdf\nPDF_OUTPUT=true\n")
+        self.assertIn("not both", message)
+        message = self.assert_usage_error(
+            "", ["--dry-run", "--output", "pdf", "--email"]
+        )
+        self.assertIn("not both", message)
+
+    def test_deprecated_output_list_rejects_unknown_values(self):
+        message = self.assert_usage_error(
+            "", environ={"SUBHOARD_OUTPUT": "digest,bogus"}
+        )
+        self.assertIn("SUBHOARD_OUTPUT contains invalid values: bogus", message)
+
+    def test_markdown_dir_setting_and_deprecated_digest_dir(self):
+        self.configure_outputs("")
+        self.assertEqual(subhoard.MARKDOWN_OUTPUT_DIR, "digest_export")
+
+        self.configure_outputs("MARKDOWN_DIR=md\n")
+        self.assertEqual(subhoard.MARKDOWN_OUTPUT_DIR, "md")
+
+        _, warnings = self.configure_outputs("DIGEST_DIR=old\n")
+        self.assertEqual(subhoard.MARKDOWN_OUTPUT_DIR, "old")
+        self.assertIn("DIGEST_DIR is deprecated; use MARKDOWN_DIR", warnings)
+
+        _, warnings = self.configure_outputs(
+            "MARKDOWN_DIR=md\n", ["--digest-dir", "cli"]
+        )
+        self.assertEqual(subhoard.MARKDOWN_OUTPUT_DIR, "cli")
+        self.assertIn("--digest-dir is deprecated", warnings)
+
+        message = self.assert_usage_error("MARKDOWN_DIR=md\nDIGEST_DIR=old\n")
+        self.assertIn("use MARKDOWN_DIR or DIGEST_DIR, not both", message)
+
+    def validate(self, **overrides):
+        settings = {
+            "SUBSTACK_URL": "https://example.com",
+            "OUTPUT_MODE": ["markdown"],
+            "CACHE_DIR": "post_cache",
+            "DRY_RUN": False,
+            "START_DATE": None,
+            "FETCH_DELAY": 0,
+            "EMAIL_DELAY": 0,
+            **overrides,
+        }
+        with ExitStack() as stack:
+            for name, value in settings.items():
+                stack.enter_context(patch.object(subhoard, name, value))
+            subhoard.validate_config()
+
+    def test_no_outputs_is_valid_cache_only_run(self):
+        self.validate(OUTPUT_MODE=[])
+
+    def test_no_outputs_without_cache_is_an_error(self):
+        with patch("builtins.print") as printed, self.assertRaises(SystemExit):
+            self.validate(OUTPUT_MODE=[], CACHE_DIR=None)
+        output = " ".join(str(c.args[0]) for c in printed.call_args_list)
+        self.assertIn("nothing to do", output)
+        self.validate(OUTPUT_MODE=[], CACHE_DIR=None, DRY_RUN=True)
 
     def test_smtp_password_from_config_file(self):
         self.configure_with("SMTP_PASSWORD=file-secret\n")
@@ -609,7 +882,7 @@ class PublicationNameTests(unittest.TestCase):
     def test_hostname_is_case_insensitive(self):
         self.assertEqual(self.name_for("https://WWW.Example.com"), "Example")
 
-    def test_digest_filename_uses_publication_name(self):
+    def test_markdown_filename_uses_publication_name(self):
         post = {
             "title": "A post",
             "subtitle": "",
@@ -622,11 +895,172 @@ class PublicationNameTests(unittest.TestCase):
                 patch.object(subhoard, "SUBSTACK_URL", "https://www.example.com")
             )
             stack.enter_context(
-                patch.object(subhoard, "DIGEST_OUTPUT_DIR", temp_dir)
+                patch.object(subhoard, "MARKDOWN_OUTPUT_DIR", temp_dir)
             )
             stack.enter_context(patch("builtins.print"))
-            subhoard.write_digest_files({"2026": [post]})
+            subhoard.write_markdown_files({"2026": [post]})
             self.assertEqual(os.listdir(temp_dir), ["Example_2026.md"])
+
+
+class HtmlExportTests(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.dir = temp_dir.name
+        for patcher in (
+            patch.object(subhoard, "HTML_OUTPUT_DIR", self.dir),
+            patch.object(subhoard, "SUBSTACK_URL", "https://example.substack.com"),
+            patch("builtins.print"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def read(self, name):
+        with open(os.path.join(self.dir, name), encoding="utf-8") as f:
+            return f.read()
+
+    def test_writes_one_html_file_per_year(self):
+        post = {
+            "title": "First & <Best>",
+            "subtitle": "A <subtitle>",
+            "url": "https://example.substack.com/p/first",
+            "date": "2026-01-02",
+            "html": "<p>Original <strong>HTML</strong></p>",
+            "markdown": "Original **HTML**",
+        }
+        older = dict(post, title="Older", date="2025-06-01")
+        subhoard.write_html_files({"2026": [post], "2025": [older]})
+
+        self.assertEqual(
+            sorted(os.listdir(self.dir)), ["Example_2025.html", "Example_2026.html"]
+        )
+        page = self.read("Example_2026.html")
+        self.assertIn("<title>Example — 2026</title>", page)
+        self.assertIn("1 posts", page)
+        self.assertIn("<h2>First &amp; &lt;Best&gt;</h2>", page)
+        self.assertIn("A &lt;subtitle&gt;", page)
+        self.assertIn("<p>Original <strong>HTML</strong></p>", page)
+        self.assertNotIn("Older", page)
+
+    def test_falls_back_to_markdown_without_cached_html(self):
+        post = {
+            "title": "Legacy",
+            "subtitle": "",
+            "url": "https://example.substack.com/p/legacy",
+            "date": "2024-01-01",
+            "html": None,
+            "markdown": "Some <text> & more",
+        }
+        empty = dict(post, title="Empty", markdown=None)
+        subhoard.write_html_files({"2024": [post, empty]})
+        page = self.read("Example_2024.html")
+        self.assertIn("<pre>Some &lt;text&gt; &amp; more</pre>", page)
+        self.assertIn("Content unavailable", page)
+
+
+class PerPostExportTests(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.dir = temp_dir.name
+        for patcher in (
+            patch.object(subhoard, "PER_POST", True),
+            patch.object(subhoard, "MARKDOWN_OUTPUT_DIR", self.dir),
+            patch.object(subhoard, "HTML_OUTPUT_DIR", self.dir),
+            patch.object(subhoard, "SUBSTACK_URL", "https://example.substack.com"),
+            patch("builtins.print"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.posts = {
+            "2024": [{
+                "title": "First",
+                "subtitle": "Sub",
+                "url": "https://example.substack.com/p/first-post",
+                "slug": "first-post",
+                "date": "2024-03-15",
+                "markdown": "First body",
+                "html": "<p>First body</p>",
+            }],
+            "2025": [{
+                "title": "Odd / name",
+                "subtitle": "",
+                "url": "https://example.substack.com/p/../../escape",
+                "date": "2025-01-02",
+                "markdown": "Second body",
+                "html": None,
+            }],
+        }
+
+    def files(self):
+        return sorted(
+            os.path.relpath(os.path.join(root, name), self.dir)
+            for root, _, names in os.walk(self.dir)
+            for name in names
+        )
+
+    def test_markdown_writes_one_file_per_post_in_year_folders(self):
+        subhoard.write_markdown_files(self.posts)
+        self.assertEqual(self.files(), [
+            os.path.join("2024", "2024-03-15-first-post.md"),
+            os.path.join("2025", "2025-01-02-escape.md"),
+        ])
+        path = os.path.join(self.dir, "2024", "2024-03-15-first-post.md")
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertTrue(text.startswith("# First\n\n*Sub*"))
+        self.assertIn("First body", text)
+
+    def test_html_writes_one_page_per_post(self):
+        subhoard.write_html_files(self.posts)
+        path = os.path.join(self.dir, "2024", "2024-03-15-first-post.html")
+        with open(path, encoding="utf-8") as f:
+            page = f.read()
+        self.assertIn("<title>First</title>", page)
+        self.assertIn("<h1>First</h1>", page)
+        self.assertIn("<p>First body</p>", page)
+
+    def test_long_slugs_with_a_shared_prefix_do_not_collide(self):
+        prefix = "a" * 90
+        first = dict(self.posts["2024"][0], slug=prefix + "-one",
+                     markdown="Body one")
+        second = dict(first, slug=prefix + "-two",
+                      url="https://example.substack.com/p/two",
+                      markdown="Body two")
+        subhoard.write_markdown_files({"2024": [first, second]})
+
+        files = self.files()
+        self.assertEqual(len(files), 2)
+        bodies = []
+        for name in files:
+            self.assertLessEqual(len(os.path.basename(name)), 80 + 15)
+            with open(os.path.join(self.dir, name), encoding="utf-8") as f:
+                bodies.append(f.read())
+        self.assertTrue(any("Body one" in body for body in bodies))
+        self.assertTrue(any("Body two" in body for body in bodies))
+
+    def test_post_filenames_are_safe(self):
+        post = {"title": "../../etc/passwd", "date": "../2024-01-01", "url": ""}
+        name = subhoard.post_filename(post, "md")
+        self.assertNotIn("/", name)
+        self.assertNotIn("..", name)
+        self.assertEqual(subhoard.safe_filename("../", "unknown"), "unknown")
+
+    def test_per_post_setting(self):
+        config = {"PER_POST": "true"}
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("SUBHOARD_")}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.dict(subhoard.FILE_CONFIG, config, clear=True),
+        ):
+            parser = subhoard.build_parser()
+            subhoard.configure_from_args(parser.parse_args(["--dry-run"]), parser)
+            self.assertTrue(subhoard.PER_POST)
+            subhoard.configure_from_args(
+                parser.parse_args(["--dry-run", "--no-per-post"]), parser
+            )
+            self.assertFalse(subhoard.PER_POST)
 
 
 def reportlab_available():
@@ -665,6 +1099,27 @@ class PdfExportTests(unittest.TestCase):
                 sorted(os.listdir(temp_dir)), ["Example_2025.pdf", "Example_2026.pdf"]
             )
             with open(os.path.join(temp_dir, "Example_2026.pdf"), "rb") as f:
+                self.assertEqual(f.read(5), b"%PDF-")
+
+    def test_writes_one_pdf_per_post_with_per_post(self):
+        post = {
+            "title": "Only",
+            "subtitle": "",
+            "url": "https://example.substack.com/p/only",
+            "slug": "only",
+            "date": "2026-01-02",
+            "markdown": "Body",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, ExitStack() as stack:
+            stack.enter_context(patch.object(subhoard, "PDF_OUTPUT_DIR", temp_dir))
+            stack.enter_context(patch.object(subhoard, "PER_POST", True))
+            stack.enter_context(
+                patch.object(subhoard, "SUBSTACK_URL", "https://example.substack.com")
+            )
+            stack.enter_context(patch("builtins.print"))
+            subhoard.write_pdf_files({"2026": [post]})
+            path = os.path.join(temp_dir, "2026", "2026-01-02-only.pdf")
+            with open(path, "rb") as f:
                 self.assertEqual(f.read(5), b"%PDF-")
 
 
