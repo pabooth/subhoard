@@ -4,9 +4,9 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Version](https://img.shields.io/github/v/release/pabooth/subhoard)
 
-Subhoard archives a Substack publication to yearly Markdown, PDF, or HTML
-files, or as HTML email. Public posts work without credentials. Subscriber content can be
-archived using a browser session exported by a user who is authorized to
+Subhoard archives a Substack publication to Markdown, PDF, or HTML files, or
+as HTML email. Public posts work without credentials. Subscriber content can
+be archived using a browser session exported by a user who is authorized to
 access it.
 
 Use Subhoard only for content you are permitted to access and retain. Do not
@@ -14,7 +14,7 @@ redistribute subscriber content without the publisher's permission.
 
 ## Features
 
-- Markdown, PDF and HTML archives grouped by year
+- Markdown, PDF and HTML archives, one file per year or one per post
 - HTML email delivery through any standard SMTP provider
 - Public-only mode with no cookies
 - Optional subscriber-content mode using an exported Substack session
