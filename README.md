@@ -86,6 +86,9 @@ What the script does:
   build is downloaded.
 - Links `subhoard` into `~/.local/bin`, so no virtual environment needs to be
   activated to run it, and prints `subhoard --version` to confirm the install.
+- Creates an empty [config file](#config-file) at `~/.shconfig` (or
+  `SUBHOARD_CONFIG`), readable only by you, if one does not already exist. An
+  existing config file is never changed.
 
 To pin a specific release, check out its tag instead, for example
 `git checkout v2.2.1`. The temporary directory can be deleted once
@@ -120,6 +123,7 @@ This removes the downloaded Camoufox browser, the virtual environment and any
 Python the installer downloaded under `~/.local/share/subhoard`, and the
 `~/.local/bin/subhoard` link. It stops without deleting anything if no
 Subhoard installation is found there.
+Your config file is left in place.
 
 ### Development
 

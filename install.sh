@@ -10,10 +10,14 @@
 # into SUBHOARD_HOME (using a pinned, checksum-verified uv), so nothing needs
 # to be installed system-wide.
 #
+# An empty, private config file is created at SUBHOARD_CONFIG (default
+# ~/.shconfig) if none exists. An existing one is never changed.
+#
 # Environment overrides:
 #   PYTHON            Python interpreter to use (must be 3.11 or newer)
 #   SUBHOARD_HOME     install location   (default ~/.local/share/subhoard)
 #   SUBHOARD_BIN_DIR  command directory  (default ~/.local/bin)
+#   SUBHOARD_CONFIG   config file        (default ~/.shconfig)
 
 set -euo pipefail
 
@@ -27,6 +31,9 @@ abspath() {
 
 SUBHOARD_HOME="$(abspath "${SUBHOARD_HOME:-$HOME/.local/share/subhoard}")"
 SUBHOARD_BIN_DIR="$(abspath "${SUBHOARD_BIN_DIR:-$HOME/.local/bin}")"
+# Expanded later by create_config, the same way Subhoard expands it.
+SUBHOARD_CONFIG="${SUBHOARD_CONFIG:-~/.shconfig}"
+CALLER_DIR="$PWD"
 if [[ -n "${PYTHON:-}" && "$PYTHON" == */* ]]; then
     PYTHON="$(abspath "$PYTHON")"
 fi
@@ -50,7 +57,7 @@ warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-    sed -n '2,17s/^# \{0,1\}//p' "$0"
+    sed -n '2,21s/^# \{0,1\}//p' "$0"
 }
 
 python_ok() {
@@ -166,6 +173,49 @@ a dedicated directory, or install Python 3.11 or newer."
     PYTHON_BIN="$(private_uv python find --managed-python --no-project "$MANAGED_PYTHON")"
 }
 
+# Create an empty config file for the user to fill in. It may later hold
+# SMTP_PASSWORD, so it is readable only by its owner. The installed Python
+# expands ~ and ~user exactly as Subhoard's loader does, resolves relative
+# paths against the caller's directory, and creates the file with O_EXCL so
+# an existing entry, including a symlink, is never followed or changed.
+create_config() {
+    "$VENV/bin/python" - "$CALLER_DIR" "$SUBHOARD_CONFIG" <<'PY'
+import os
+import sys
+
+caller_dir, raw = sys.argv[1:]
+path = os.path.join(caller_dir, os.path.expanduser(raw))
+header = (
+    "# Subhoard settings, one KEY=VALUE per line. Run `subhoard --help` or see\n"
+    "# the README for the available keys. Command-line arguments and SUBHOARD_*\n"
+    "# environment variables take precedence over this file.\n"
+)
+try:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+except FileExistsError:
+    print(f"Keeping existing config file {path}")
+    sys.exit(0)
+except OSError as exc:
+    print(f"warning: could not create config file {path}: {exc.strerror}",
+          file=sys.stderr)
+    sys.exit(0)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as config_file:
+        config_file.write(header)
+except OSError as exc:
+    # This process created the file, so removing it touches nothing else.
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    print(f"warning: could not write config file {path}: {exc.strerror}",
+          file=sys.stderr)
+    sys.exit(0)
+print(f"\n==> Created config file {path}")
+PY
+}
+
 uninstall() {
     # Only delete what this script created, so a mistaken SUBHOARD_HOME
     # cannot remove an unrelated directory.
@@ -241,6 +291,8 @@ install() {
     step "Linking $LINK"
     mkdir -p "$SUBHOARD_BIN_DIR"
     ln -sf "$VENV/bin/subhoard" "$LINK"
+
+    create_config
 
     step "Done"
     "$LINK" --version

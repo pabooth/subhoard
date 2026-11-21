@@ -7,6 +7,12 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Added
+
+- `install.sh` creates an empty, private config file at `~/.shconfig` (or
+  `SUBHOARD_CONFIG`) if one does not already exist.
+
 ## [2.4.0] - 2026-11-21
 
 Re-added config-by-file option
