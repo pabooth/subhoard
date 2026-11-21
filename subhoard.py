@@ -14,6 +14,7 @@ import hashlib
 import html
 import json
 import os
+import platform
 import random
 import re
 import smtplib
@@ -1250,7 +1251,12 @@ def main(argv=None):
 
     def start_browser():
         """Launch a Camoufox browser and return (cf, browser, context, page)."""
-        cf = Camoufox(headless=True)
+        # Claim this machine's OS. A random one (e.g. Windows on a Mac) makes
+        # Camoufox randomise canvas readback, which reads as a hardened Firefox
+        # and triggers a LeakWarning on every launch.
+        host_os = {"Darwin": "macos", "Windows": "windows",
+                   "Linux": "linux"}.get(platform.system())
+        cf = Camoufox(headless=True, os=host_os)
         browser = cf.__enter__()
         context = browser.new_context()
         if not FREE_ONLY:
