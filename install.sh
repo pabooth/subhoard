@@ -6,6 +6,10 @@
 #   ./install.sh               install or update
 #   ./install.sh --uninstall   remove Subhoard (and the Camoufox browser)
 #
+# If no Python 3.11 or newer is found, a private copy of Python is downloaded
+# into SUBHOARD_HOME (using a pinned, checksum-verified uv), so nothing needs
+# to be installed system-wide.
+#
 # Environment overrides:
 #   PYTHON            Python interpreter to use (must be 3.11 or newer)
 #   SUBHOARD_HOME     install location   (default ~/.local/share/subhoard)
@@ -23,39 +27,123 @@ abspath() {
 
 SUBHOARD_HOME="$(abspath "${SUBHOARD_HOME:-$HOME/.local/share/subhoard}")"
 SUBHOARD_BIN_DIR="$(abspath "${SUBHOARD_BIN_DIR:-$HOME/.local/bin}")"
+if [[ -n "${PYTHON:-}" && "$PYTHON" == */* ]]; then
+    PYTHON="$(abspath "$PYTHON")"
+fi
 VENV="$SUBHOARD_HOME/venv"
 BACKUP="$VENV.previous"
 LINK="$SUBHOARD_BIN_DIR/subhoard"
+
+# Fallback when no suitable Python is installed: a pinned uv release fetches a
+# standalone Python into SUBHOARD_HOME. To update, pick a uv release that is at
+# least two weeks old and copy the .sha256 files from its GitHub release.
+UV_VERSION="0.13.7"
+MANAGED_PYTHON="3.13"
+UV_DIR="$SUBHOARD_HOME/uv"
+PYTHON_DIR="$SUBHOARD_HOME/python"
 
 step() { printf '\n==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-    sed -n '2,13s/^# \{0,1\}//p' "$0"
+    sed -n '2,17s/^# \{0,1\}//p' "$0"
 }
 
 python_ok() {
     "$1" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null
 }
 
+uv_target() {
+    local os arch
+    case "$(uname -s)" in
+        Darwin) os=apple-darwin ;;
+        Linux) os=unknown-linux-gnu ;;
+        *) return 1 ;;
+    esac
+    case "$(uname -m)" in
+        arm64 | aarch64) arch=aarch64 ;;
+        x86_64 | amd64) arch=x86_64 ;;
+        *) return 1 ;;
+    esac
+    printf '%s-%s\n' "$arch" "$os"
+}
+
+uv_sha256() {
+    case "$1" in
+        aarch64-apple-darwin) echo 81b811b57e4624df7ed3aac148e0359100d9962f3d9dce00aec533dc2e086731 ;;
+        x86_64-apple-darwin) echo 20c47e4c1f630b8abaff8c291fa9b9aa300fef92c4fbff95adf198b55287cda7 ;;
+        aarch64-unknown-linux-gnu) echo 71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc ;;
+        x86_64-unknown-linux-gnu) echo c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83 ;;
+        *) return 1 ;;
+    esac
+}
+
+sha256_of() {
+    if command -v sha256sum >/dev/null; then
+        sha256sum "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1
+    fi
+}
+
+# Run the private uv, ignoring any uv configuration the user has and keeping
+# its cache and Python downloads inside SUBHOARD_HOME.
+private_uv() {
+    UV_NO_CONFIG=1 UV_CACHE_DIR="$UV_DIR/cache" UV_PYTHON_INSTALL_DIR="$PYTHON_DIR" \
+        "$UV_DIR/uv" "$@"
+}
+
+fetch_uv() {
+    local target="$1" sha tmp
+    sha="$(uv_sha256 "$target")"
+    if [[ -x "$UV_DIR/uv" && "$("$UV_DIR/uv" --version)" == "uv $UV_VERSION"* ]]; then
+        return
+    fi
+    command -v curl >/dev/null || die "curl is required to download Python."
+
+    step "Downloading uv $UV_VERSION to install Python"
+    tmp="$(mktemp -d)"
+    curl --proto '=https' --tlsv1.2 -fsSL -o "$tmp/uv.tar.gz" \
+        "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$target.tar.gz" \
+        || { rm -rf "$tmp"; die "could not download uv."; }
+    if [[ "$(sha256_of "$tmp/uv.tar.gz")" != "$sha" ]]; then
+        rm -rf "$tmp"
+        die "the uv download did not match its expected checksum; nothing was installed."
+    fi
+    tar -xzf "$tmp/uv.tar.gz" -C "$tmp"
+    mkdir -p "$UV_DIR"
+    mv "$tmp/uv-$target/uv" "$UV_DIR/uv"
+    rm -rf "$tmp"
+}
+
+# Sets PYTHON_BIN to a Python 3.11 or newer interpreter, downloading a private
+# one if PYTHON is unset and none is installed.
 find_python() {
     if [[ -n "${PYTHON:-}" ]]; then
-        local python="$PYTHON"
-        [[ "$python" == */* ]] && python="$(abspath "$python")"
-        python_ok "$python" || die "PYTHON=$PYTHON is not Python 3.11 or newer."
-        printf '%s\n' "$python"
+        python_ok "$PYTHON" || die "PYTHON=$PYTHON is not Python 3.11 or newer."
+        PYTHON_BIN="$PYTHON"
         return
     fi
     local candidate
     for candidate in python3 python3.14 python3.13 python3.12 python3.11; do
         if command -v "$candidate" >/dev/null && python_ok "$candidate"; then
-            command -v "$candidate"
+            PYTHON_BIN="$(command -v "$candidate")"
             return
         fi
     done
-    die "Python 3.11 or newer is required. Install it from
-https://www.python.org/downloads/ or Homebrew, or set PYTHON=/path/to/python3."
+
+    local target
+    target="$(uv_target)" && uv_sha256 "$target" >/dev/null \
+        || die "Python 3.11 or newer is required, and it cannot be downloaded
+automatically on $(uname -sm). Install it, then re-run this script, or set
+PYTHON=/path/to/python3."
+
+    echo "No Python 3.11 or newer found; installing a private copy in $PYTHON_DIR."
+    fetch_uv "$target"
+    step "Installing Python $MANAGED_PYTHON"
+    private_uv python install --quiet --no-bin "$MANAGED_PYTHON"
+    PYTHON_BIN="$(private_uv python find --managed-python --no-project "$MANAGED_PYTHON")"
 }
 
 uninstall() {
@@ -74,8 +162,8 @@ uninstall() {
         warn "$LINK does not point to this installation; left in place."
     fi
 
-    step "Removing $VENV"
-    rm -rf "$VENV" "$BACKUP"
+    step "Removing Subhoard's files from $SUBHOARD_HOME"
+    rm -rf "$VENV" "$BACKUP" "$PYTHON_DIR" "$UV_DIR"
     rmdir "$SUBHOARD_HOME" 2>/dev/null || true
     echo "Subhoard has been uninstalled."
 }
@@ -93,9 +181,6 @@ restore_previous() {
 }
 
 install() {
-    local python
-    python="$(find_python)"
-
     cd "$(dirname "$0")"
     [[ -f requirements.lock && -f pyproject.toml ]] \
         || die "Run this script from inside a Subhoard checkout."
@@ -106,7 +191,8 @@ install() {
   git checkout \"\$(git describe --tags --abbrev=0)\""
     fi
 
-    echo "Using $python ($("$python" --version 2>&1))"
+    find_python
+    echo "Using $PYTHON_BIN ($("$PYTHON_BIN" --version 2>&1))"
 
     step "Creating virtual environment in $VENV"
     rm -rf "$BACKUP"
@@ -114,7 +200,7 @@ install() {
         mv "$VENV" "$BACKUP"
         trap restore_previous EXIT
     fi
-    "$python" -m venv "$VENV"
+    "$PYTHON_BIN" -m venv "$VENV"
 
     step "Installing locked dependencies"
     "$VENV/bin/python" -m pip install --quiet --disable-pip-version-check --require-hashes -r requirements.lock
